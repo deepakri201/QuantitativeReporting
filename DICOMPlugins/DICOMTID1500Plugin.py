@@ -20,6 +20,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
   UID_EnhancedSRStorage = "1.2.840.10008.5.1.4.1.1.88.22"
   UID_ComprehensiveSRStorage = "1.2.840.10008.5.1.4.1.1.88.33"
+  UID_Comprehensive3DSRStorage = "1.2.840.10008.5.1.4.1.1.88.34"
   UID_SegmentationStorage = "1.2.840.10008.5.1.4.1.1.66.4"
   UID_RealWorldValueMappingStorage = "1.2.840.10008.5.1.4.1.1.67"
 
@@ -74,7 +75,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     try:
       isDicomTID1500 = self.getDICOMValue(dataset, "Modality") == 'SR' and \
                        (self.getDICOMValue(dataset, "SOPClassUID") == self.UID_EnhancedSRStorage or
-                        self.getDICOMValue(dataset, "SOPClassUID") == self.UID_ComprehensiveSRStorage) and \
+                        self.getDICOMValue(dataset, "SOPClassUID") == self.UID_ComprehensiveSRStorage or 
+                        self.getDICOMValue(dataset, "SOPClassUID") == self.UID_Comprehensive3DSRStorage) and \
                        self.getDICOMValue(dataset, "ContentTemplateSequence")[0].TemplateIdentifier == '1500'
     except (AttributeError, IndexError):
       isDicomTID1500 = False
