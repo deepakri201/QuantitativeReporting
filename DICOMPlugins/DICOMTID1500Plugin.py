@@ -334,8 +334,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # slicer.mrmlScene.AddNode(tableNode)
     tableNode.SetAttribute("readonly", "Yes") 
 
-    print('point_infos: ' + str(point_infos))
-
     # Add columns 
     col = tableNode.AddColumn()
     col.SetName("Tracking Identifier")
@@ -359,8 +357,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       # qual_eval_values = p['QualitativeEvaluationValues']
       content_sequence_names = p['ContentSequenceNames']
       content_sequence_values = p['ContentSequenceValues']
-      # print('qual_eval_names: ' + str(len(qual_eval_names)))
-      print('content_sequence_names: ' + str(len(content_sequence_names)))
       # add tracking info and finding site info 
       rowIndex = tableNode.AddEmptyRow()
       tableNode.SetCellText(rowIndex, 0, tracking_identifier)
@@ -390,9 +386,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         rowIndexValue = num_rows + j
         colName = str(content_sequence_name[2])
         colValue = str(content_sequence_values[j][2])
-        print('rowIndexValue: ' + str(rowIndexValue))
-        print('colName: ' + str(colName))
-        print('colValue: ' + str(colValue))
         col.SetName(colName) 
         tableNode.SetCellText(rowIndex, rowIndexValue, colValue) 
 
@@ -658,11 +651,38 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     return 
   
-  def displayPointMarkups(self): 
+  def create_3d_point(self, point_index, point_x, point_y, point_z, point_text): 
+    """
+    Create the point markup 
+    """
+
+    markupsNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", point_text)
+    markupsNode.CreateDefaultDisplayNodes()
+    markupsNode.SetLocked(True)
+    markupsNode.AddControlPoint([point_x, point_y, point_z])
+    markupsNode.SetName(point_text)
+    markupsNode.SetNthControlPointLabel(point_index, point_text)
+
+    # displayNode = markupsNode.GetDisplayNode()
+    # displayNode.SetUseFiducialLabels(True)
+
+    return 
+  
+  def displayPointMarkups(self, point_infos): 
     """
     Display the point markups. 
     """
 
+    for i,p in enumerate(point_infos):
+      point_text = p['TrackingIdentifier']
+      point_x = -p['point'][0]
+      point_y = -p['point'][1] 
+      point_z = p['point'][2]
+      self.create_3d_point(i, point_x, point_y, point_z, point_text)
+      # jump to the first point 
+      if (i==0):
+        slicer.modules.markups.logic().JumpSlicesToLocation(point_x, point_y, point_z, True)
+    
     return 
 
   def load(self, loadable):
