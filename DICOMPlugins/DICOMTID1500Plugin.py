@@ -204,7 +204,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # read the SR using highdicom 
     sr = hd.sr.srread(srFileName)
 
-    # First get the planar roi measurement gorups 
+    # First get the planar roi measurement groups 
     groups = sr.content.get_planar_roi_measurement_groups()
     num_groups = len(groups)
     # Then we check if the SR contains a bounding box or not 
@@ -222,6 +222,92 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           checkIfSRContainsBbox = 0 
 
     return checkIfSRContainsBbox 
+  
+  def checkIfSRContainsPoint(self, srFileName): 
+    """
+    Checks if the SR contains a point. 
+    """
+
+    # default is that the SR does not contain a point 
+    checkIfSRContainsPoint = 0 
+
+    # read the SR using highdicom 
+    sr = hd.sr.srread(srFileName)
+
+    # create the ImageRegion3D code 
+    image_region_code = hd.sr.value_types.Code(
+        value='111030',
+        scheme_designator='DCM',
+        meaning='Image Region'
+    )
+
+    # First get the planar roi measurement groups 
+    groups = sr.content.get_planar_roi_measurement_groups()
+    num_groups = len(groups)
+
+    # Then we check if the SR contains a point or not 
+    # Iterate through the groups 
+    for group in groups: 
+      # group.reference_type = Code(value='111030', scheme_designator='DCM', meaning='Image Region', scheme_version=None)
+      # Check if there is a reference_type, should be ImageRegion
+      try: 
+        reference_type = group.reference_type
+      except: 
+        print('reference_type does not exist for group')
+      # If it does equal image_region_code, then check if it's a POINT
+      if (reference_type == image_region_code):
+        try: 
+          # type(group.roi) = highdicom.sr.content.ImageRegion3D
+          graphic_type = group.roi.GraphicType
+        except: 
+          print('GraphicType does not exist for group.roi')
+        if (graphic_type == "POINT"): 
+          checkIfSRContainsPoint = 1 
+ 
+    return checkIfSRContainsPoint 
+  
+  def checkIfSRContainsPolyline(self, srFileName): 
+    """
+    Checks if the SR contains a polyline. 
+    """
+
+    # default is that the SR contains a polyline 
+    checkIfSRContainsPolyline  = 0 
+
+    # read the SR using highdicom 
+    sr = hd.sr.srread(srFileName)
+
+    # create the ImageRegion3D code 
+    image_region_code = hd.sr.value_types.Code(
+        value='111030',
+        scheme_designator='DCM',
+        meaning='Image Region'
+    )
+
+    # First get the planar roi measurement groups 
+    groups = sr.content.get_planar_roi_measurement_groups()
+    num_groups = len(groups)
+
+    # Then we check if the SR contains a polyline or not 
+    # Iterate through the groups 
+    for group in groups: 
+      # group.reference_type = Code(value='111030', scheme_designator='DCM', meaning='Image Region', scheme_version=None)
+      # Check if there is a reference_type, should be ImageRegion
+      try: 
+        reference_type = group.reference_type
+      except: 
+        print('reference_type does not exist for group')
+      # If it does equal image_region_code, then check if it's a POINT
+      if (reference_type == image_region_code):
+        try: 
+          # type(group.roi) = highdicom.sr.content.ImageRegion3D
+          graphic_type = group.roi.GraphicType
+        except: 
+          print('GraphicType does not exist for group.roi')
+        if (graphic_type == "POLYLINE"): 
+          checkIfSRContainsPolyline = 1 
+ 
+    return checkIfSRContainsPolyline 
   
   def getIPPFromSOP(self, referenced_sop_instance_uid, referenced_series_instance_uid):
     """
@@ -391,6 +477,44 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
 
     return tableNode 
+  
+  def createPolylineTable(self, point_infos):
+    """
+    Create and display a table for the polyline info 
+    """
+
+    tableNode = slicer.vtkMRMLTableNode()
+    # slicer.mrmlScene.AddNode(tableNode)
+    tableNode.SetAttribute("readonly", "Yes") 
+
+    # Add columns 
+    col = tableNode.AddColumn()
+    col.SetName("Tracking Identifier")
+    col = tableNode.AddColumn()
+    col.SetName("FindingType")
+    col = tableNode.AddColumn()
+    col.SetName("FindingSite")
+    col = tableNode.AddColumn()
+    col.SetName("PolyLine")
+
+    for i,p in enumerate(point_infos):
+      # get values 
+      tracking_identifier = p['TrackingIdentifier']
+      tracking_uid = p['TrackingUID']
+      finding_type = p['FindingType']
+      finding_site = p['FindingSite'][0] # check this later. 
+      polyline = p["polyline"]
+      polyline = [str(np.round(f,2)) for f in polyline]
+      polyline_str = f"({', '.join(polyline)})"
+      # add tracking info and finding site info 
+      rowIndex = tableNode.AddEmptyRow()
+      tableNode.SetCellText(rowIndex, 0, tracking_identifier)
+      tableNode.SetCellText(rowIndex, 1, finding_type[2]) # CodeMeaning
+      tableNode.SetCellText(rowIndex, 2, finding_site[2]) # CodeMeaning
+      # add polyline
+      tableNode.SetCellText(rowIndex, 3, polyline_str) 
+
+    return tableNode 
 
   def extractBboxMetadataToVtkTableNode(self, srFileName): 
     """
@@ -530,12 +654,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         for n in range(0,len(group[0])): 
             ContentSequence = group[0].ContentSequence[n]
             if ContentSequence.RelationshipType=="CONTAINS":
-              # print('ContentSequence.name: ' + '[' + str(ContentSequence.name.CodeValue) + ', ' + 
-              #                                       str(ContentSequence.name.CodingSchemeDesignator) + ', ' + 
-              #                                       str(ContentSequence.name.CodeMeaning) + ']') 
-              # print('ContentSequence.value: ' + '[' + str(ContentSequence.value.CodeValue) + ', ' + 
-              #                                         str(ContentSequence.value.CodingSchemeDesignator) + ', ' + 
-              #                                         str(ContentSequence.value.CodeMeaning) + ']') 
               content_sequence_name_CodeValue = ContentSequence.name.CodeValue 
               content_sequence_name_CodingSchemeDesignator = ContentSequence.name.CodingSchemeDesignator 
               content_sequence_name_CodeMeaning = ContentSequence.name.CodeMeaning
@@ -579,6 +697,78 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     tableNode = self.createPointTable(point_infos)
 
     return point_infos, tableNode 
+  
+  def extractLineMetadataToVtkTableNode(self, srFileName):
+
+    """
+    Extracts the point metadata from the SR using highdicom, 
+    and creates a table node. 
+    """
+
+    # read SR using highdicom 
+    sr = hd.sr.srread(srFileName)
+
+    # get the referenced SeriesInstanceUID 
+    referenced_series_instance_uid = sr.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
+
+    # will store the info needed for table too. 
+    line_infos = [] 
+
+    # First get the planar roi measurement gorups 
+    groups = sr.content.get_planar_roi_measurement_groups()
+
+    for group in groups: 
+
+      # Get the tracking ids 
+      tracking_identifier = group.tracking_identifier
+      tracking_uid = group.tracking_uid
+
+      # Get the findings and finding_sites 
+      finding_type = [group.finding_type.CodeValue, group.finding_type.CodingSchemeDesignator, group.finding_type.CodeMeaning]
+      finding_sites = []
+      for finding_site in group.finding_sites:
+        if hasattr(finding_site, 'ConceptCodeSequence') and finding_site.ConceptCodeSequence:
+          finding_sites.append([finding_site.ConceptCodeSequence[0].CodeValue, 
+                                finding_site.ConceptCodeSequence[0].CodingSchemeDesignator,
+                                finding_site.ConceptCodeSequence[0].CodeMeaning])
+
+      # if (group.reference_type.meaning == "Image Region"): # why meaning instead of CodeMeaning? 
+      if (group.reference_type.value=="111030" and \
+          group.reference_type.scheme_designator=="DCM" and \
+          group.reference_type.meaning=="Image Region"):
+
+        roi = group.roi # should exist if Image Region is present      
+        try: 
+          referenced_sop_instance_uid = roi.ContentSequence[0].referenced_sop_instance_uid
+        except: 
+          print('Cannot access referenced SOPInstanceUID')
+
+        if (roi.GraphicType=="POLYLINE"):
+          polyline = roi.GraphicData 
+          extracted_data_type = roi.PixelOriginInterpretation # Could be frame, or volume, interpretation of points is different then! 
+          # get the points 
+          num_points = np.int32(len(polyline)/2)
+          point_line = [] 
+          for n in range(0,num_points): 
+            pointx = polyline[(n*2)] 
+            pointy = polyline[((n*2)+1)]
+            pointz = self.getIPPFromSOP(referenced_sop_instance_uid,
+                                        referenced_series_instance_uid)[2] 
+            point_line.append([-pointx, -pointy, pointz]) # negate for display in Slicer 
+          # append to poly_infos
+          line_infos.append({
+                            "TrackingIdentifier": tracking_identifier, 
+                            "TrackingUID" : tracking_uid,
+                            "SOPInstanceUID" : referenced_sop_instance_uid, 
+                            "FindingType": finding_type, 
+                            "FindingSite": finding_sites,
+                            "polyline": point_line
+                            })
+
+    # create and display tableNode 
+    tableNode = self.createPolylineTable(line_infos)
+
+    return line_infos, tableNode 
    
   def create_2d_roi(self, center_ras, width, height, slice_normal=(0, 0, 1), thickness=1.0, bbox_name="2D_BoundingBox"):
     """
@@ -684,6 +874,32 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         slicer.modules.markups.logic().JumpSlicesToLocation(point_x, point_y, point_z, True)
     
     return 
+  
+  def displayLineMarkups(self, line_infos):
+    """
+    Display the line markups. 
+    """
+
+    for i,p in enumerate(line_infos):
+      line_text = p['TrackingIdentifier']
+      polyline = p['polyline']
+      # add new node 
+      lineNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsLineNode", line_text)
+      # get number of points 
+      num_points = len(polyline)
+      # add each as a control point 
+      for n in range(0,num_points): 
+        point_x = polyline[n][0] # already negated 
+        point_y = polyline[n][1] # already negated 
+        point_z = polyline[n][2]
+        lineNode.AddControlPoint(point_x, point_y, point_z)
+        # jump to the first line 
+        if (i==0 and n==0):
+          slicer.modules.markups.logic().JumpSlicesToLocation(point_x, point_y, point_z, True)
+      # do not display the length measurement 
+      lineNode.GetMeasurement('length').SetEnabled(False)
+
+    return 
 
   def load(self, loadable):
     logging.debug('DICOM SR TID1500 load()')
@@ -780,20 +996,31 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       # use highdicom code to read the SR 
       else: 
 
-        # check if a point or a bbox 
+        # check if contains a point, bbox, polyline 
         checkIfSRContainsBbox = self.checkIfSRContainsBbox(srFileName)
+        checkIfSRContainsPoint = self.checkIfSRContainsPoint(srFileName)
+        checkIfSRContainsPolyline = self.checkIfSRContainsPolyline(srFileName)
 
         # if bbox 
         if (checkIfSRContainsBbox): 
+          print('SR contains bounding box')
           bboxInfo, bboxTableNode = self.extractBboxMetadataToVtkTableNode(srFileName)
           self.showTable(bboxTableNode)
           self.displayBboxMarkups(bboxInfo)
 
         # if point 
-        else: 
-          pointInfo, pointTableNode = self.extractPointMetadataToVtkTableNode(srFileName)
-          self.showTable(pointTableNode)
-          self.displayPointMarkups(pointInfo)
+        if (checkIfSRContainsPoint):
+            print('SR contains point')
+            pointInfo, pointTableNode = self.extractPointMetadataToVtkTableNode(srFileName)
+            self.showTable(pointTableNode)
+            self.displayPointMarkups(pointInfo)
+
+        # if polyline but not bbox 
+        if (checkIfSRContainsPolyline==1 and checkIfSRContainsBbox==0):
+            print('SR contains a polyline but not a bbox')
+            lineInfo, lineTableNode = self.extractLineMetadataToVtkTableNode(srFileName)
+            self.showTable(lineTableNode)
+            self.displayLineMarkups(lineInfo)
 
 
     return len(tables) > 0
