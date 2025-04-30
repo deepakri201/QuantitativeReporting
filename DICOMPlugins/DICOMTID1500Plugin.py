@@ -363,6 +363,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     tableNode = slicer.vtkMRMLTableNode()
     # slicer.mrmlScene.AddNode(tableNode)
     tableNode.SetAttribute("readonly", "Yes") 
+    tableNode.SetName("Table for bounding boxes")
 
     # Add columns 
     col = tableNode.AddColumn()
@@ -425,6 +426,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     tableNode = slicer.vtkMRMLTableNode()
     # slicer.mrmlScene.AddNode(tableNode)
     tableNode.SetAttribute("readonly", "Yes") 
+    tableNode.SetName("Table for points")
 
     # Add columns 
     col = tableNode.AddColumn()
@@ -495,6 +497,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     tableNode = slicer.vtkMRMLTableNode()
     # slicer.mrmlScene.AddNode(tableNode)
     tableNode.SetAttribute("readonly", "Yes") 
+    tableNode.SetName("Table for lines")
 
     # Add columns 
     col = tableNode.AddColumn()
@@ -779,22 +782,24 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     return line_infos, tableNode 
    
-  def create_2d_roi(self, center_ras, width, height, slice_normal=(0, 0, 1), thickness=1.0, bbox_name="2D_BoundingBox"):
+  def create_2d_roi(self, loadable, center_ras, width, height, slice_normal=(0, 0, 1), thickness=1.0, bbox_name="2D_BoundingBox"):
     """
     Create a Markups ROI as a thin 2D bounding box on a specified slice plane.
     
     Args:
-        center_ras (tuple): (x, y, z) center in RAS coordinates.
-        width (float): Width of the box (in mm).
-        height (float): Height of the box (in mm).
-        slice_normal (tuple): Normal vector of the slice plane (e.g., (0,0,1) for axial).
-        thickness (float): Depth of the box (in mm), small for a 2D box.
+        loadable             - loadable of the corresponding SR 
+        center_ras (tuple)   - (x, y, z) center in RAS coordinates.
+        width (float)        - Width of the box (in mm).
+        height (float)       - Height of the box (in mm).
+        slice_normal (tuple) - Normal vector of the slice plane (e.g., (0,0,1) for axial).
+        thickness (float)    - Depth of the box (in mm), small for a 2D box.
     
     Returns:
-        vtkMRMLMarkupsROINode: The ROI node created.
+        vtkMRMLMarkupsROINode - The ROI node created.
     """
     # Create ROI node
     roi_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsROINode", bbox_name)
+    self.addSeriesInSubjectHierarchy(loadable, roi_node)
     
     # Set the size (width, height, thickness)
     size = [width, height, thickness]
@@ -827,9 +832,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     if (display_node):
         display_node.SetGlyphScale(1.0)
     
-    return roi_node
+    return roi_node 
 
-  def displayBboxMarkups(self, poly_infos): 
+  def displayBboxMarkups(self, loadable, poly_infos): 
     """
     Displays the bounding box markups. 
     """
@@ -849,13 +854,13 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       center_ras = np.asarray([center_x, center_y, center_z])
       bbox_name = tracking_identifier # for now 
       # create roi 
-      self.create_2d_roi(center_ras, width, height, slice_normal=(0, 0, 1), thickness=1.0, bbox_name=bbox_name) 
+      self.create_2d_roi(loadable, center_ras, width, height, slice_normal=(0, 0, 1), thickness=1.0, bbox_name=bbox_name) 
       if (i==0):
         slicer.modules.markups.logic().JumpSlicesToLocation(center_x, center_y, center_z, True)
 
     return 
   
-  def create_3d_point(self, point_index, point_x, point_y, point_z, point_text): 
+  def create_3d_point(self, loadable, point_index, point_x, point_y, point_z, point_text): 
     """
     Create the point markup 
     """
@@ -867,12 +872,14 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     markupsNode.SetName(point_text)
     markupsNode.SetNthControlPointLabel(point_index, point_text)
 
+    self.addSeriesInSubjectHierarchy(loadable, markupsNode)
+
     # displayNode = markupsNode.GetDisplayNode()
     # displayNode.SetUseFiducialLabels(True)
 
     return 
   
-  def displayPointMarkups(self, point_infos): 
+  def displayPointMarkups(self, loadable, point_infos): 
     """
     Display the point markups. 
     """
@@ -882,14 +889,14 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       point_x = -p['point'][0]
       point_y = -p['point'][1] 
       point_z = p['point'][2]
-      self.create_3d_point(i, point_x, point_y, point_z, point_text)
+      self.create_3d_point(loadable, i, point_x, point_y, point_z, point_text)
       # jump to the first point 
       if (i==0):
         slicer.modules.markups.logic().JumpSlicesToLocation(point_x, point_y, point_z, True)
     
     return 
   
-  def displayLineMarkups(self, line_infos):
+  def displayLineMarkups(self, loadable, line_infos):
     """
     Display the line markups. 
     """
@@ -899,6 +906,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       polyline = p['polyline']
       # add new node 
       lineNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsLineNode", line_text)
+      self.addSeriesInSubjectHierarchy(loadable, lineNode)
       # get number of points 
       num_points = len(polyline)
       # add each as a control point 
@@ -1020,21 +1028,24 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           print('SR contains bounding box')
           bboxInfo, bboxTableNode = self.extractBboxMetadataToVtkTableNode(srFileName)
           self.showTable(bboxTableNode)
-          self.displayBboxMarkups(bboxInfo)
+          self.addSeriesInSubjectHierarchy(loadable, bboxTableNode)
+          self.displayBboxMarkups(loadable, bboxInfo)
 
         # if point 
         if (checkIfSRContainsPoint):
             print('SR contains point')
             pointInfo, pointTableNode = self.extractPointMetadataToVtkTableNode(srFileName)
             self.showTable(pointTableNode)
-            self.displayPointMarkups(pointInfo)
+            self.addSeriesInSubjectHierarchy(loadable, pointTableNode)
+            self.displayPointMarkups(loadable, pointInfo)
 
         # if polyline but not bbox 
         if (checkIfSRContainsPolyline==1 and checkIfSRContainsBbox==0):
             print('SR contains a polyline but not a bbox')
             lineInfo, lineTableNode = self.extractLineMetadataToVtkTableNode(srFileName)
             self.showTable(lineTableNode)
-            self.displayLineMarkups(lineInfo)
+            self.addSeriesInSubjectHierarchy(loadable, lineTableNode)
+            self.displayLineMarkups(loadable, lineInfo)
 
 
     return len(tables) > 0
