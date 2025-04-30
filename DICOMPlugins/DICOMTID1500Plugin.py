@@ -380,6 +380,12 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     col = tableNode.AddColumn()
     col.SetName("center_RAS")
 
+    # Order p by TrackingIdentifier?
+    # poly_infos = sorted(poly_infos, key=lambda x: x['TrackingIdentifier'])
+    # poly_infos = dict(sorted(data.items(),key=lambda item: int(item[1]['TrackingIdentifier'])))
+    # Or, order by IPP2 
+    poly_infos = sorted(poly_infos, key=lambda x: x['center_z'])
+
     for i,p in enumerate(poly_infos):
       # get values 
       tracking_identifier = p['TrackingIdentifier']
@@ -429,6 +435,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     col.SetName("FindingSite")
     col = tableNode.AddColumn()
     col.SetName("Point")
+
+    # Order by IPP2 
+    point_infos = sorted(point_infos, key=lambda x: x['point'][2])
 
     for i,p in enumerate(point_infos):
       # get values 
@@ -825,6 +834,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     Displays the bounding box markups. 
     """
 
+    # Order by IPP2 
+    poly_infos = sorted(poly_infos, key=lambda x: x['center_z'])
+
     for i,p in enumerate(poly_infos):
       # get values 
       polyline = p['polyline']
@@ -838,6 +850,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       bbox_name = tracking_identifier # for now 
       # create roi 
       self.create_2d_roi(center_ras, width, height, slice_normal=(0, 0, 1), thickness=1.0, bbox_name=bbox_name) 
+      if (i==0):
+        slicer.modules.markups.logic().JumpSlicesToLocation(center_x, center_y, center_z, True)
 
     return 
   
