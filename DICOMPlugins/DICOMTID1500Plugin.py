@@ -901,6 +901,24 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     Display the line markups. 
     """
 
+    # # Get the subject hierarchy
+    # shNode = slicer.modules.subjecthierarchy.logic().GetSubjectHierarchyNode()
+    # # linesFolderID = shNode.CreateFolderItem(shNode.GetSceneItemID(), "lines") 
+    # # get the StudyInstanceUID of the loadable 
+    # dicomFilePath = loadable.files[0]  # Use the first file in the loadable
+    # StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, "0020,000D") 
+    # # Get the SeriesDescription of the loadable 
+    # # SeriesDescription = slicer.dicomDatabase.fileValue(dicomFilePath, "0008,103E") # this is the SeriesDescription of the SR, need the reference. 
+    # ReferencedSeriesInstanceUID =  slicer.dicomDatabase.fileValue(dicomFilePath,"referencedSeriesUID")
+    # # for now 
+    # SeriesDescription = ReferencedSeriesInstanceUID
+
+    # # Get the studyNode 
+    # studyNode = shNode.GetItemByUID(slicer.vtkMRMLSubjectHierarchyConstants.GetDICOMUIDName(), StudyInstanceUID)
+    # # Now create the folder 
+    # linesFolderID = shNode.CreateFolderItem(studyNode, 'lines for: ' + SeriesDescription)
+
+    # Create all the line nodes 
     for i,p in enumerate(line_infos):
       line_text = p['TrackingIdentifier']
       polyline = p['polyline']
@@ -920,6 +938,10 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           slicer.modules.markups.logic().JumpSlicesToLocation(point_x, point_y, point_z, True)
       # do not display the length measurement 
       lineNode.GetMeasurement('length').SetEnabled(False)
+      # # Get the Subject Hierarchy item ID for the markup node
+      # markupItemID = shNode.GetItemByDataNode(lineNode)
+      # # Set the parent to the folder
+      # shNode.SetItemParent(markupItemID, linesFolderID)
 
     return 
 
@@ -1046,6 +1068,16 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
             self.showTable(lineTableNode)
             self.addSeriesInSubjectHierarchy(loadable, lineTableNode)
             self.displayLineMarkups(loadable, lineInfo)
+            # create folder in subject hierarchy
+            # shNode = slicer.modules.subjecthierarchy.logic().GetSubjectHierarchyNode()
+            # linesDirectory = shNode.CreateFolderItem(shNode.GetSceneItemID(), "lines") # later use a better descriptor 
+            # add markups to folder 
+            # Get the Subject Hierarchy item ID for the markup node
+            # markupItemID = shNode.GetItemByDataNode(markupNode)
+            # Set the parent to the folder
+            # shNode.SetItemParent(markupItemID, folderItemID)
+
+
 
 
     return len(tables) > 0
