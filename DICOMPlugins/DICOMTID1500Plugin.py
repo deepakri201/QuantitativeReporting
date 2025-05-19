@@ -76,11 +76,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
         loadables.append(loadable)
 
-        # print('loadable.referencedSegInstanceUIDs: ' + str(loadable.referencedSegInstanceUIDs))
-        # print('loadable.ReferencedSegmentationInstanceUIDs: ' + str(loadable.ReferencedSegmentationInstanceUIDs))
-        # print('loadable.ReferencedOtherInstanceUIDs: ' + str(loadable.ReferencedOtherInstanceUIDs))
-        # print('loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
-
         logging.debug('DICOM SR TID1500 modality found')
       
     return loadables
@@ -196,7 +191,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       #     if (SOPInstanceUIDs):
       #       loadable.referencedInstanceUIDs += SOPInstanceUIDs 
           
-        # We also check for FrameOfReferenceUID
+        # We also check for FrameOfReferenceUID, and add to the list of loadable.referencedInstanceUIDs 
         if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []) and (loadable.referencedInstanceUIDs == []): 
           print('Check for FrameOfReferenceUID')
           FrameOfReferenceUIDs = [] 
@@ -219,7 +214,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
             # If it does equal image_region_code, then check if it's a POINT
             if (reference_type == image_region_code):
               try: 
-                # type(group.roi) = highdicom.sr.content.ImageRegion3D
                 graphic_type = group.roi.GraphicType
               except: 
                 print('GraphicType does not exist for group.roi')
