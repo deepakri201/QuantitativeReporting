@@ -59,6 +59,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       seriesDescription = self.getDICOMValue(dataset, "SeriesDescription", "Unknown")
 
       isDicomTID1500 = self.isDICOMTID1500(dataset)
+      print('isDicomTID1500: ' + str(isDicomTID1500))
 
       if isDicomTID1500:
         loadable = self.createLoadableAndAddReferences([dataset])
@@ -71,10 +72,17 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         refName = self.referencedSeriesName(loadable)
         if refName != "":
           loadable.name = refName + " " + seriesDescription + " - SR TID1500"
+        print('loadable.name: ' + str(loadable.name))
 
         loadables.append(loadable)
 
+        print('loadable.referencedSegInstanceUIDs: ' + str(loadable.referencedSegInstanceUIDs))
+        print('loadable.ReferencedSegmentationInstanceUIDs: ' + str(loadable.ReferencedSegmentationInstanceUIDs))
+        print('loadable.ReferencedOtherInstanceUIDs: ' + str(loadable.ReferencedOtherInstanceUIDs))
+        print('loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
+
         logging.debug('DICOM SR TID1500 modality found')
+      
     return loadables
 
   def isDICOMTID1500(self, dataset):
@@ -132,6 +140,36 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         segLoadables = segPlugin.examine([slicer.dicomDatabase.filesForSeries(segSeriesInstanceUID)])
         for segLoadable in segLoadables:
           loadable.referencedInstanceUIDs += segLoadable.referencedInstanceUIDs
+      
+      # First, since the point/bbox/line SRs have no SEG associated, and therefore no referencedInstanceUIDs were added, we do a special case 
+      # We add to the loadable.referencedInstanceUIDs list 
+      # This only adds the particular SOPs that the bbox/lines are on. 
+      # if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []):
+      #   loadable.referencedInstanceUIDs += loadable.ReferencedOtherInstanceUIDs
+      # We need to add all of the SOPs for a series 
+      if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []): 
+        # Iterate through the loadable.ReferencedOtherInstanceUIDs, and get the associated SeriesInstanceUIDs 
+        SeriesInstanceUIDs = [] 
+        for SOPInstanceUID in loadable.ReferencedOtherInstanceUIDs: 
+          filePath = slicer.dicomDatabase.fileForInstance(SOPInstanceUID)
+          SeriesInstanceUIDs.append(slicer.dicomDatabase.fileValue(filePath, "0020,000E"))
+        # Then get a unique list of the SeriesInstanceUID, likely is 1
+        SeriesInstanceUIDs = list(set(SeriesInstanceUIDs))
+        # Now for each of these SeriesInstanceUIDs, get the list of SOPInstanceUIDs 
+        db = slicer.dicomDatabase
+        SOPInstanceUIDs = [] 
+        for SeriesInstanceUID in SeriesInstanceUIDs: 
+          fileList = db.filesForSeries(SeriesInstanceUID) 
+          for file in fileList: 
+            SOPInstanceUIDs.append(db.fileValue(file, "0008,0018"))
+        SOPInstanceUIDs = list(set(SOPInstanceUIDs))
+        # Now add to the loadable.referencedInstanceUIDs 
+        if (SOPInstanceUIDs):
+          loadable.referencedInstanceUIDs += SOPInstanceUIDs 
+
+      # Now, we also check for the FrameOfReferenceUID
+      # if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []): 
+
 
     loadable.referencedInstanceUIDs = list(set(loadable.referencedInstanceUIDs))
 
@@ -143,6 +181,19 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     if len(loadable.ReferencedRWVMSeriesInstanceUIDs)>1:
       logging.warning("SR references more than one RWVM. This has not been tested!")
     # not adding RWVM instances to referencedSeriesInstanceUIDs
+  
+   
+    # Handle the case with FrameOfReferencedUID from the SR 
+
+    # for dataset in datasets: 
+    #   # Get the FrameOfReferenceUID
+    #   FrameOfReferenceUID = dataset.FrameOfReferenceUID 
+      # If the FrameOfReferencedUID exists, get the series that have that FrameOfReferenceUID  
+      
+      # Get the SOPInstanceUIDs for each of the series that match 
+
+      # Add these SOPInstanceUIDs to the loadable.referencedInstanceUIDs 
+      
     return loadable
 
   def sortReportsByDateTime(self, uids):
