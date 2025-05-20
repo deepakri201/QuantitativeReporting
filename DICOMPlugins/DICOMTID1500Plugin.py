@@ -74,6 +74,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         if refName != "":
           loadable.name = refName + " " + seriesDescription + " - SR TID1500"
 
+        print('loadable.ReferencedOtherInstanceUIDs: ' + str(loadable.ReferencedOtherInstanceUIDs))
+        print('loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
+
         loadables.append(loadable)
 
         logging.debug('DICOM SR TID1500 modality found')
@@ -106,7 +109,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     loadable = DICOMLoadable()
     loadable.selected = True
-    loadable.confidence = 0.95
+    #loadable.confidence = 0.95
+    loadable.confidence = 1.0
 
     loadable.referencedSegInstanceUIDs = []
     # store lists of UIDs separately to avoid re-parsing later
