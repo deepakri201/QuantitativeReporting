@@ -68,7 +68,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         loadable.name = seriesDescription + ' - as a DICOM SR TID1500 object'
         loadable.tooltip = loadable.name
         loadable.selected = True
-        loadable.confidence = 0.95
+        #loadable.confidence = 0.95
+        loadable.confidence = 1.0 
         loadable.uids = [uid]
         refName = self.referencedSeriesName(loadable)
         if refName != "":
@@ -76,7 +77,13 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
         loadables.append(loadable)
 
+        print('loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
+        print('num loadable.referencedInstanceUIDs: ' + str(len(loadable.referencedInstanceUIDs)))
+        print('num unique loadable.referencedInstanceUIDs: ' + str(len(list(set(loadable.referencedInstanceUIDs)))))
+
         logging.debug('DICOM SR TID1500 modality found')
+      
+      # print('num loadables: ' + str(len(loadables)))
       
     return loadables
 
@@ -106,7 +113,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     loadable = DICOMLoadable()
     loadable.selected = True
-    loadable.confidence = 0.95
+    # loadable.confidence = 0.95
+    loadable.confidence = 1.0
 
     loadable.referencedSegInstanceUIDs = []
     # store lists of UIDs separately to avoid re-parsing later
@@ -918,7 +926,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     """
     # Create ROI node
     roi_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsROINode", bbox_name)
-    self.addSeriesInSubjectHierarchy(loadable, roi_node)
+    #self.addSeriesInSubjectHierarchy(loadable, roi_node)
     
     # Set the size (width, height, thickness)
     size = [width, height, thickness]
@@ -958,6 +966,26 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     Displays the bounding box markups. 
     """
 
+    # Get the subject hierarchy
+    shNode = slicer.modules.subjecthierarchy.logic().GetSubjectHierarchyNode()
+
+    # get the StudyInstanceUID of the loadable 
+    dicomFilePath = loadable.files[0]  # Use the first file in the loadable
+    StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, "0020,000D") 
+
+    # Read the dataset to get the Referenced SeriesNumber and SeriesDescription - to name the folder of markups. 
+    dataset = pydicom.read_file(dicomFilePath)
+    ReferencedSeriesInstanceUID = dataset.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
+    fileList = slicer.dicomDatabase.filesForSeries(ReferencedSeriesInstanceUID)
+    ReferencedSeriesNumber = slicer.dicomDatabase.fileValue(fileList[0], "0020,0011")
+    ReferencedSeriesDescription = slicer.dicomDatabase.fileValue(fileList[0], "0008,103E")
+    SeriesDescription = ReferencedSeriesNumber + ': ' + ReferencedSeriesDescription
+
+    # Get the studyNode 
+    studyNode = shNode.GetItemByUID(slicer.vtkMRMLSubjectHierarchyConstants.GetDICOMUIDName(), StudyInstanceUID)
+    # Now create the folder and set the name 
+    bboxFolderID = shNode.CreateFolderItem(studyNode, 'bounding box for: ' + SeriesDescription)
+
     # Order by IPP2 
     poly_infos = sorted(poly_infos, key=lambda x: x['center_z'])
 
@@ -973,11 +1001,19 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       center_ras = np.asarray([center_x, center_y, center_z])
       bbox_name = tracking_identifier # for now 
       # create roi 
-      self.create_2d_roi(loadable, center_ras, width, height, slice_normal=(0, 0, 1), thickness=1.0, bbox_name=bbox_name) 
+      bboxNode = self.create_2d_roi(loadable, center_ras, width, height, slice_normal=(0, 0, 1), thickness=1.0, bbox_name=bbox_name) 
+      markupItemID = shNode.GetItemByDataNode(bboxNode)
+      # Set the parent to the folder
+      shNode.SetItemParent(markupItemID, bboxFolderID)
       if (i==0):
         slicer.modules.markups.logic().JumpSlicesToLocation(center_x, center_y, center_z, True)
 
+    # childIDs = vtk.vtkIdList()
+    # shNode.GetItemChildren(bboxFolderID, childIDs) 
+    # print('num folderChildren: ' + str(childIDs))
+
     return 
+  
   
   def create_3d_point(self, loadable, point_index, point_x, point_y, point_z, point_text): 
     """
@@ -991,24 +1027,81 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     markupsNode.SetName(point_text)
     markupsNode.SetNthControlPointLabel(point_index, point_text)
 
-    self.addSeriesInSubjectHierarchy(loadable, markupsNode)
+    # self.addSeriesInSubjectHierarchy(loadable, markupsNode)
 
     # displayNode = markupsNode.GetDisplayNode()
     # displayNode.SetUseFiducialLabels(True)
 
-    return 
+    return markupsNode
   
   def displayPointMarkups(self, loadable, point_infos): 
     """
     Display the point markups. 
     """
 
+    # Get the subject hierarchy
+    shNode = slicer.modules.subjecthierarchy.logic().GetSubjectHierarchyNode()
+
+    # get the StudyInstanceUID of the loadable 
+    dicomFilePath = loadable.files[0]  # Use the first file in the loadable
+    StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, "0020,000D") 
+
+    # For now, read the SR to get the FrameOfReferenceUID - and set this to be the folder name. 
+    sr = hd.sr.srread(dicomFilePath)
+    FrameOfReferenceUIDs = [] 
+    # create the ImageRegion3D code 
+    image_region_code = hd.sr.value_types.Code(
+        value='111030',
+        scheme_designator='DCM',
+        meaning='Image Region'
+    )
+    # First get the planar roi measurement groups 
+    groups = sr.content.get_planar_roi_measurement_groups()
+    # Then we check if the SR contains a point or not 
+    # Iterate through the groups 
+    for group in groups: 
+      # Check if there is a reference_type, should be ImageRegion
+      try: 
+        reference_type = group.reference_type
+      except: 
+        print('reference_type does not exist for group')
+      # If it does equal image_region_code, then check if it's a POINT
+      if (reference_type == image_region_code):
+        try: 
+          graphic_type = group.roi.GraphicType
+        except: 
+          print('GraphicType does not exist for group.roi')
+        if (graphic_type == "POINT"): 
+          FrameOfReferenceUIDs.append(group.roi.ReferencedFrameOfReferenceUID)
+      # unique FrameOfReferenceUIDs 
+      FrameOfReferenceUIDs = list(set(FrameOfReferenceUIDs))
+    if (len(FrameOfReferenceUIDs)==1):
+      SeriesDescription = FrameOfReferenceUIDs[0]
+    else:
+      SeriesDescription = FrameOfReferenceUIDs
+
+    # Get the studyNode 
+    studyNode = shNode.GetItemByUID(slicer.vtkMRMLSubjectHierarchyConstants.GetDICOMUIDName(), StudyInstanceUID)
+    # Now create the folder and set the name 
+    pointsFolderID = shNode.CreateFolderItem(studyNode, 'points for FrameOfReferenceUID: ' + str(SeriesDescription))
+
+    # # Read the dataset to get the Referenced SeriesNumber and SeriesDescription - to name the folder of markups. 
+    # dataset = pydicom.read_file(dicomFilePath)
+    # ReferencedSeriesInstanceUID = dataset.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
+    # fileList = slicer.dicomDatabase.filesForSeries(ReferencedSeriesInstanceUID)
+    # ReferencedSeriesNumber = slicer.dicomDatabase.fileValue(fileList[0], "0020,0011")
+    # ReferencedSeriesDescription = slicer.dicomDatabase.fileValue(fileList[0], "0008,103E")
+    # SeriesDescription = ReferencedSeriesNumber + ': ' + ReferencedSeriesDescription
+
     for i,p in enumerate(point_infos):
       point_text = p['TrackingIdentifier']
       point_x = -p['point'][0]
       point_y = -p['point'][1] 
       point_z = p['point'][2]
-      self.create_3d_point(loadable, i, point_x, point_y, point_z, point_text)
+      pointsNode = self.create_3d_point(loadable, i, point_x, point_y, point_z, point_text)
+      markupItemID = shNode.GetItemByDataNode(pointsNode)
+      # Set the parent to the folder
+      shNode.SetItemParent(markupItemID, pointsFolderID)
       # jump to the first point 
       if (i==0):
         slicer.modules.markups.logic().JumpSlicesToLocation(point_x, point_y, point_z, True)
@@ -1020,22 +1113,25 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     Display the line markups. 
     """
 
-    # # Get the subject hierarchy
-    # shNode = slicer.modules.subjecthierarchy.logic().GetSubjectHierarchyNode()
-    # # linesFolderID = shNode.CreateFolderItem(shNode.GetSceneItemID(), "lines") 
-    # # get the StudyInstanceUID of the loadable 
-    # dicomFilePath = loadable.files[0]  # Use the first file in the loadable
-    # StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, "0020,000D") 
-    # # Get the SeriesDescription of the loadable 
-    # # SeriesDescription = slicer.dicomDatabase.fileValue(dicomFilePath, "0008,103E") # this is the SeriesDescription of the SR, need the reference. 
-    # ReferencedSeriesInstanceUID =  slicer.dicomDatabase.fileValue(dicomFilePath,"referencedSeriesUID")
-    # # for now 
-    # SeriesDescription = ReferencedSeriesInstanceUID
+    # Get the subject hierarchy
+    shNode = slicer.modules.subjecthierarchy.logic().GetSubjectHierarchyNode()
 
-    # # Get the studyNode 
-    # studyNode = shNode.GetItemByUID(slicer.vtkMRMLSubjectHierarchyConstants.GetDICOMUIDName(), StudyInstanceUID)
-    # # Now create the folder 
-    # linesFolderID = shNode.CreateFolderItem(studyNode, 'lines for: ' + SeriesDescription)
+    # get the StudyInstanceUID of the loadable 
+    dicomFilePath = loadable.files[0]  # Use the first file in the loadable
+    StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, "0020,000D") 
+
+    # Read the dataset to get the Referenced SeriesNumber and SeriesDescription - to name the folder of markups. 
+    dataset = pydicom.read_file(dicomFilePath)
+    ReferencedSeriesInstanceUID = dataset.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
+    fileList = slicer.dicomDatabase.filesForSeries(ReferencedSeriesInstanceUID)
+    ReferencedSeriesNumber = slicer.dicomDatabase.fileValue(fileList[0], "0020,0011")
+    ReferencedSeriesDescription = slicer.dicomDatabase.fileValue(fileList[0], "0008,103E")
+    SeriesDescription = ReferencedSeriesNumber + ': ' + ReferencedSeriesDescription
+
+    # Get the studyNode 
+    studyNode = shNode.GetItemByUID(slicer.vtkMRMLSubjectHierarchyConstants.GetDICOMUIDName(), StudyInstanceUID)
+    # Now create the folder and set the name 
+    linesFolderID = shNode.CreateFolderItem(studyNode, 'lines for: ' + SeriesDescription)
 
     # Create all the line nodes 
     for i,p in enumerate(line_infos):
@@ -1043,7 +1139,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       polyline = p['polyline']
       # add new node 
       lineNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsLineNode", line_text)
-      self.addSeriesInSubjectHierarchy(loadable, lineNode)
+      # self.addSeriesInSubjectHierarchy(loadable, lineNode)
       # get number of points 
       num_points = len(polyline)
       # add each as a control point 
@@ -1057,10 +1153,16 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           slicer.modules.markups.logic().JumpSlicesToLocation(point_x, point_y, point_z, True)
       # do not display the length measurement 
       lineNode.GetMeasurement('length').SetEnabled(False)
-      # # Get the Subject Hierarchy item ID for the markup node
-      # markupItemID = shNode.GetItemByDataNode(lineNode)
-      # # Set the parent to the folder
-      # shNode.SetItemParent(markupItemID, linesFolderID)
+      # Add to subject hierarchy
+      #self.addSeriesInSubjectHierarchy(loadable, lineNode)
+      # Get the Subject Hierarchy item ID for the markup node
+      markupItemID = shNode.GetItemByDataNode(lineNode)
+      # Set the parent to the folder
+      shNode.SetItemParent(markupItemID, linesFolderID)
+
+    # childIDs = vtk.vtkIdList()
+    # shNode.GetItemChildren(linesFolderID, childIDs) 
+    # print('num folderChildren: ' + str(childIDs))
 
     return 
 
@@ -1158,6 +1260,11 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
       # use highdicom code to read the SR 
       else: 
+
+        # check here if my loadable contains all the proper referencedInstanceUIDs - or if that only happens in the examineFiles 
+        # print('in load function: loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
+        # print('in load function: num loadable.referencedInstanceUIDs:' + str(len(loadable.referencedInstanceUIDs)))
+        # print('in load function: num unique loadable.referencedInstanceUIDs:' + str(len(list(set(loadable.referencedInstanceUIDs)))))
 
         # check if contains a point, bbox, polyline 
         checkIfSRContainsBbox = self.checkIfSRContainsBbox(srFileName)
