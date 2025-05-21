@@ -78,8 +78,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         loadables.append(loadable)
 
         print('loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
-        print('num loadable.referencedInstanceUIDs: ' + str(len(loadable.referencedInstanceUIDs)))
-        print('num unique loadable.referencedInstanceUIDs: ' + str(len(list(set(loadable.referencedInstanceUIDs)))))
+        # print('num loadable.referencedInstanceUIDs: ' + str(len(loadable.referencedInstanceUIDs)))
+        # print('num unique loadable.referencedInstanceUIDs: ' + str(len(list(set(loadable.referencedInstanceUIDs)))))
 
         logging.debug('DICOM SR TID1500 modality found')
       
@@ -581,6 +581,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       # qual_eval_values = p['QualitativeEvaluationValues']
       content_sequence_names = p['ContentSequenceNames']
       content_sequence_values = p['ContentSequenceValues']
+      # print('table: content_sequence_names: ' + str(content_sequence_names))
+      # print('table: content_sequence_values: ' + str(content_sequence_values))
       # add tracking info and finding site info 
       rowIndex = tableNode.AddEmptyRow()
       tableNode.SetCellText(rowIndex, 0, tracking_identifier)
@@ -606,11 +608,14 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       # then add for content sequence
       # num_rows = num_rows + len(qual_eval_names)
       for j, content_sequence_name in enumerate(content_sequence_names): 
-        col = tableNode.AddColumn() 
         rowIndexValue = num_rows + j
         colName = str(content_sequence_name[2])
         colValue = str(content_sequence_values[j][2])
-        col.SetName(colName) 
+        # can't add column each time - if there is more than 1 point. 
+        # therefore, only add column when on first point_info. 
+        if (i==0):
+          col = tableNode.AddColumn() 
+          col.SetName(colName) 
         tableNode.SetCellText(rowIndex, rowIndexValue, colValue) 
 
 
@@ -793,20 +798,34 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         for n in range(0,len(group[0])): 
             ContentSequence = group[0].ContentSequence[n]
             if ContentSequence.RelationshipType=="CONTAINS":
+              # print('ContentSequence.name: ' + str(ContentSequence.name))
               content_sequence_name_CodeValue = ContentSequence.name.CodeValue 
               content_sequence_name_CodingSchemeDesignator = ContentSequence.name.CodingSchemeDesignator 
               content_sequence_name_CodeMeaning = ContentSequence.name.CodeMeaning
-              content_sequence_value_CodeValue = ContentSequence.value.CodeValue 
-              content_sequence_value_CodingSchemeDesignator = ContentSequence.value.CodingSchemeDesignator 
-              content_sequence_value_CodeMeaning = ContentSequence.value.CodeMeaning 
-              content_sequence_name = [content_sequence_name_CodeValue, 
-                                       content_sequence_name_CodingSchemeDesignator, 
-                                       content_sequence_name_CodeMeaning]
-              content_sequence_value = [content_sequence_value_CodeValue, 
-                                        content_sequence_value_CodingSchemeDesignator, 
-                                        content_sequence_value_CodeMeaning]
-              content_sequence_names.append(content_sequence_name)
-              content_sequence_values.append(content_sequence_value)
+              # if ContentSequence.name is 111030, DCM, Image Region, we skip, as we will be reading this later in the group. 
+              if (content_sequence_name_CodeValue=="111030" and \
+                  content_sequence_name_CodingSchemeDesignator=="DCM" and \
+                  content_sequence_name_CodeMeaning=="Image Region"):
+                #continue
+                break
+              else:
+                # print('ContentSequence.value: ' + str(ContentSequence.value))
+                content_sequence_value_CodeValue = ContentSequence.value.CodeValue 
+                content_sequence_value_CodingSchemeDesignator = ContentSequence.value.CodingSchemeDesignator 
+                content_sequence_value_CodeMeaning = ContentSequence.value.CodeMeaning 
+                content_sequence_name = [content_sequence_name_CodeValue, 
+                                        content_sequence_name_CodingSchemeDesignator, 
+                                        content_sequence_name_CodeMeaning]
+                content_sequence_value = [content_sequence_value_CodeValue, 
+                                          content_sequence_value_CodingSchemeDesignator, 
+                                          content_sequence_value_CodeMeaning]
+                content_sequence_names.append(content_sequence_name)
+                content_sequence_values.append(content_sequence_value)
+
+      # print('content_sequence_names: ' + str(content_sequence_names))
+      # print('num content_sequence_names: ' + str(len(content_sequence_names)))
+      # print('content_sequence_values: ' + str(content_sequence_values))
+      # print('num content_sequence_values: ' + str(len(content_sequence_values)))
 
       # if (group.reference_type.meaning == "Image Region"): # why meaning instead of CodeMeaning? 
       if (group.reference_type.value=="111030" and \
@@ -1098,7 +1117,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       point_x = -p['point'][0]
       point_y = -p['point'][1] 
       point_z = p['point'][2]
-      pointsNode = self.create_3d_point(loadable, i, point_x, point_y, point_z, point_text)
+      # index should always be 0. not i. 
+      pointsNode = self.create_3d_point(loadable, 0, point_x, point_y, point_z, point_text)
       markupItemID = shNode.GetItemByDataNode(pointsNode)
       # Set the parent to the folder
       shNode.SetItemParent(markupItemID, pointsFolderID)
