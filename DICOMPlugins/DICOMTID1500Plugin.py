@@ -20,6 +20,7 @@ try:
 except ModuleNotFoundError:
     slicer.util.pip_install("highdicom")
     import highdicom as hd 
+from hd.sr.value_types import Code
 
 
 class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
@@ -68,8 +69,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         loadable.name = seriesDescription + ' - as a DICOM SR TID1500 object'
         loadable.tooltip = loadable.name
         loadable.selected = True
-        #loadable.confidence = 0.95
-        loadable.confidence = 1.0 
+        loadable.confidence = 0.95
         loadable.uids = [uid]
         refName = self.referencedSeriesName(loadable)
         if refName != "":
@@ -82,8 +82,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         # print('num unique loadable.referencedInstanceUIDs: ' + str(len(list(set(loadable.referencedInstanceUIDs)))))
 
         logging.debug('DICOM SR TID1500 modality found')
-      
-      # print('num loadables: ' + str(len(loadables)))
       
     return loadables
 
@@ -104,6 +102,62 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     if hasattr(loadable, "referencedSOPInstanceUID"):
       referencedName = self.defaultSeriesNodeName(loadable.referencedSOPInstanceUID)
     return referencedName
+  
+  def getDICOMTagValue(self, tag_name):
+    """This function takes as input DICOM tag name, and 
+      returns the numeric string for that name"""
+      
+    if tag_name == "PatientID":
+      tag_numeric = "0010,0020"
+    elif tag_name == "StudyDate":
+      tag_numeric = "0008,0020"
+    elif tag_name == "StudyInstanceUID":
+      tag_numeric = "0020,000D"
+    elif tag_name == "SeriesInstanceUID": 
+      tag_numeric = "0020,000E" 
+    elif tag_name == "SeriesNumber":
+      tag_numeric = "0020,0011"
+    elif tag_name == "SeriesDescription":
+      tag_numeric = "0008,103E"
+    elif tag_name == "SOPInstanceUID": 
+      tag_numeric = "0008,0018"
+    elif tag_name == "ReferencedSeriesSequence":
+      tag_numeric = "0008,1115"
+    elif tag_name == "Modality":
+      tag_numeric = "0008,0060"
+    elif tag_name == "FrameOfReferenceUID": 
+      tag_numeric = "0020,0052"
+    else:
+      tag_numeric = "" 
+    
+    return tag_numeric
+  
+  def getHighdicomCode(self, tag_name): 
+    """This function takes as input a standardized string, and returns 
+    the highdicom Code"""
+
+    if (tag_name == "Image Region"): 
+      highdicom_code = hd.sr.value_types.Code(
+                        value='111030',
+                        scheme_designator='DCM',
+                        meaning='Image Region'
+                      )
+    elif (tag_name == "Geometric purpose of region"): 
+      highdicom_code = hd.sr.value_types.Code(
+                        value='130400',
+                        scheme_designator='DCM',
+                        meaning='Geometric purpose of region'
+                      )
+    elif (tag_name == "Bounded by"): 
+      highdicom_code = hd.sr.value_types.Code(
+                        value='75958009',
+                        scheme_designator='SCT',
+                        meaning='Bounded by'
+                      )
+    else: 
+      highdicom_code = ""
+
+    return highdicom_code
 
   def createLoadableAndAddReferences(self, datasets, sr):
     """
@@ -113,8 +167,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     loadable = DICOMLoadable()
     loadable.selected = True
-    # loadable.confidence = 0.95
-    loadable.confidence = 1.0
+    loadable.confidence = 0.95
 
     loadable.referencedSegInstanceUIDs = []
     # store lists of UIDs separately to avoid re-parsing later
@@ -162,7 +215,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         SeriesInstanceUIDs = [] 
         for SOPInstanceUID in loadable.ReferencedOtherInstanceUIDs: 
           filePath = slicer.dicomDatabase.fileForInstance(SOPInstanceUID)
-          SeriesInstanceUIDs.append(slicer.dicomDatabase.fileValue(filePath, "0020,000E"))
+          SeriesInstanceUIDs.append(slicer.dicomDatabase.fileValue(filePath, self.getDICOMTagValue("SeriesInstanceUID"))) 
         # Then get a unique list of the SeriesInstanceUID, likely is 1
         SeriesInstanceUIDs = list(set(SeriesInstanceUIDs))
         # Now for each of these SeriesInstanceUIDs, get the list of SOPInstanceUIDs 
@@ -172,43 +225,18 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           for SeriesInstanceUID in SeriesInstanceUIDs: 
             fileList = db.filesForSeries(SeriesInstanceUID) 
             for file in fileList: 
-              SOPInstanceUIDs.append(db.fileValue(file, "0008,0018"))
+              SOPInstanceUIDs.append(db.fileValue(file, self.getDICOMTagValue("SOPInstanceUID"))) 
           SOPInstanceUIDs = list(set(SOPInstanceUIDs))
           # Now add to the loadable.referencedInstanceUIDs 
           if (SOPInstanceUIDs):
             loadable.referencedInstanceUIDs += SOPInstanceUIDs 
-
-      # # Now, we also check for PertinentOtherEvidenceSequence
-      # if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []) and (loadable.referencedInstanceUIDs == []):
-      #   SeriesInstanceUIDs = [] 
-      #   if hasattr(dataset, "PertinentOtherEvidenceSequence"):
-      #     for refSeriesSequence in dataset.PertinentOtherEvidenceSequence:
-      #       for referencedSeriesSequence in refSeriesSequence.ReferencedSeriesSequence:
-      #         SeriesInstanceUIDs.append(referencedSeriesSequence.SeriesInstanceUID)
-      #   print('SeriesInstanceUIDs: ' + str(SeriesInstanceUIDs))
-      #   # Now for each of these SeriesInstanceUIDs, get the list of SOPInstanceUIDs 
-      #   if (SeriesInstanceUIDs):
-      #     db = slicer.dicomDatabase
-      #     SOPInstanceUIDs = [] 
-      #     for SeriesInstanceUID in SeriesInstanceUIDs: 
-      #       fileList = db.filesForSeries(SeriesInstanceUID) 
-      #       for file in fileList: 
-      #         SOPInstanceUIDs.append(db.fileValue(file, "0008,0018"))
-      #     SOPInstanceUIDs = list(set(SOPInstanceUIDs))
-      #     # Now add to the loadable.referencedInstanceUIDs 
-      #     if (SOPInstanceUIDs):
-      #       loadable.referencedInstanceUIDs += SOPInstanceUIDs 
           
         # We also check for FrameOfReferenceUID, and add to the list of loadable.referencedInstanceUIDs 
         if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []) and (loadable.referencedInstanceUIDs == []): 
           print('Check for FrameOfReferenceUID')
           FrameOfReferenceUIDs = [] 
-          # create the ImageRegion3D code 
-          image_region_code = hd.sr.value_types.Code(
-              value='111030',
-              scheme_designator='DCM',
-              meaning='Image Region'
-          )
+          # get the ImageRegion3D code 
+          image_region_code = self.getHighdicomCode("Image Region")
           # First get the planar roi measurement groups 
           groups = sr.content.get_planar_roi_measurement_groups()
           # Then we check if the SR contains a point or not 
@@ -238,7 +266,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
             possible_SeriesInstanceUIDs = [] 
             for SeriesInstanceUID in SeriesInstanceUIDs: 
               FrameOfReferenceUID_forSeries = slicer.dicomDatabase.fileValue(
-                                                        slicer.dicomDatabase.filesForSeries(SeriesInstanceUID)[0], "0020,0052")
+                                                        slicer.dicomDatabase.filesForSeries(SeriesInstanceUID)[0], self.getDICOMTagValue("FrameOfReferenceUID")) 
               # check if this matches any of the FrameOfReferenceUIDs, if so, add to list of possible_SeriesInstanceUIDs  
               if FrameOfReferenceUID_forSeries in FrameOfReferenceUIDs: 
                 possible_SeriesInstanceUIDs.append(SeriesInstanceUID)
@@ -249,7 +277,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
               for SeriesInstanceUID in possible_SeriesInstanceUIDs: 
                 fileList = db.filesForSeries(SeriesInstanceUID) 
                 for file in fileList: 
-                  SOPInstanceUIDs.append(db.fileValue(file, "0008,0018"))
+                  SOPInstanceUIDs.append(db.fileValue(file, self.getDICOMTagValue("SOPInstanceUID"))) 
               SOPInstanceUIDs = list(set(SOPInstanceUIDs))
               # Now add to the loadable.referencedInstanceUIDs 
               if (SOPInstanceUIDs):
@@ -305,13 +333,17 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # read the SR using highdicom 
     sr = hd.sr.srread(srFileName)
 
+    # get the image region code 
+    image_region_code = self.getHighdicomCode("Image Region")
+
     planar_roi_measurement_groups = sr.content.get_planar_roi_measurement_groups()
     num_planar_roi_measurement_groups = len(planar_roi_measurement_groups)
     if (num_planar_roi_measurement_groups > 0): 
       for planar_roi_measurement_group in planar_roi_measurement_groups: 
-        if (planar_roi_measurement_group.reference_type.value=="111030" and \
-            planar_roi_measurement_group.reference_type.scheme_designator=="DCM" and \
-            planar_roi_measurement_group.reference_type.meaning=="Image Region"):
+        # Here we check if it is an Image Region 
+        if (planar_roi_measurement_group.reference_type == image_region_code):
+        # if (planar_roi_measurement_group.reference_type.value=="111030" and \
+        #     planar_roi_measurement_group.reference_type.scheme_designator=="DCM"): 
           if (planar_roi_measurement_group.roi.value_type == hd.sr.ValueTypeValues('SCOORD') or 
               planar_roi_measurement_group.roi.value_type == hd.sr.ValueTypeValues('SCOORD3D')):
             checkUsePlugin = 0 
@@ -324,6 +356,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     """
     Checks if the SR contains a bounding box or not. 
     """
+    geometric_purpose_of_region_code = self.getHighdicomCode("Geometric purpose of region")
+    bounded_by_code = self.getHighdicomCode("Bounded by")
 
     # default is that SR does not contain a bounding box 
     checkIfSRContainsBbox = 0 
@@ -338,12 +372,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     for group in groups: 
       qual_evals = group.get_qualitative_evaluations()
       for qual_eval in qual_evals: 
-        if qual_eval.name.CodeValue == "130400" and \
-          qual_eval.name.CodingSchemeDesignator == "DCM" and \
-          qual_eval.name.CodeMeaning == "Geometric purpose of region" and \
-          qual_eval.value.CodeValue == "75958009" and \
-          qual_eval.value.CodingSchemeDesignator == "SCT" and \
-          qual_eval.value.CodeMeaning == "Bounded by": 
+        # Here we check if it is a Geometric purpose of region, and Bounded by 
+        if qual_eval.name == geometric_purpose_of_region_code and qual_eval.value == bounded_by_code: 
           checkIfSRContainsBbox = 1 
         else: 
           checkIfSRContainsBbox = 0 
@@ -361,12 +391,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # read the SR using highdicom 
     sr = hd.sr.srread(srFileName)
 
-    # create the ImageRegion3D code 
-    image_region_code = hd.sr.value_types.Code(
-        value='111030',
-        scheme_designator='DCM',
-        meaning='Image Region'
-    )
+    # get the ImageRegion3D code 
+    image_region_code = self.getHighdicomCode("Image Region")
 
     # First get the planar roi measurement groups 
     groups = sr.content.get_planar_roi_measurement_groups()
@@ -375,14 +401,13 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # Then we check if the SR contains a point or not 
     # Iterate through the groups 
     for group in groups: 
-      # group.reference_type = Code(value='111030', scheme_designator='DCM', meaning='Image Region', scheme_version=None)
-      # Check if there is a reference_type, should be ImageRegion
+      # Check if there is a reference_type, should be Image Region
       try: 
         reference_type = group.reference_type
       except: 
         print('reference_type does not exist for group')
       # If it does equal image_region_code, then check if it's a POINT
-      if (reference_type == image_region_code):
+      if (reference_type == image_region_code): 
         try: 
           # type(group.roi) = highdicom.sr.content.ImageRegion3D
           graphic_type = group.roi.GraphicType
@@ -404,12 +429,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # read the SR using highdicom 
     sr = hd.sr.srread(srFileName)
 
-    # create the ImageRegion3D code 
-    image_region_code = hd.sr.value_types.Code(
-        value='111030',
-        scheme_designator='DCM',
-        meaning='Image Region'
-    )
+    # get the ImageRegion3D code 
+    image_region_code = self.getHighdicomCode("Image Region")
 
     # First get the planar roi measurement groups 
     groups = sr.content.get_planar_roi_measurement_groups()
@@ -418,14 +439,13 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # Then we check if the SR contains a polyline or not 
     # Iterate through the groups 
     for group in groups: 
-      # group.reference_type = Code(value='111030', scheme_designator='DCM', meaning='Image Region', scheme_version=None)
-      # Check if there is a reference_type, should be ImageRegion
+      # Check if there is a reference_type, should be Image Region
       try: 
         reference_type = group.reference_type
       except: 
         print('reference_type does not exist for group')
       # If it does equal image_region_code, then check if it's a POINT
-      if (reference_type == image_region_code):
+      if (reference_type == image_region_code): 
         try: 
           # type(group.roi) = highdicom.sr.content.ImageRegion3D
           graphic_type = group.roi.GraphicType
@@ -671,6 +691,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # get the referenced SeriesInstanceUID 
     referenced_series_instance_uid = sr.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
 
+    # get the image_region_code 
+    image_region_code = self.getHighdicomCode("Image Region")
+
     # will store the info needed for table too. 
     poly_infos = [] 
 
@@ -692,11 +715,10 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
                                 finding_site.ConceptCodeSequence[0].CodingSchemeDesignator,
                                 finding_site.ConceptCodeSequence[0].CodeMeaning])
 
-      # if (group.reference_type.meaning == "Image Region"): # why meaning instead of CodeMeaning? 
-      if (group.reference_type.value=="111030" and \
-          group.reference_type.scheme_designator=="DCM" and \
-          group.reference_type.meaning=="Image Region"):
-
+      # Here we check for Image Region
+      # if (group.reference_type.value=="111030" and \
+      #     group.reference_type.scheme_designator=="DCM"):
+      if (group.reference_type == image_region_code):
         roi = group.roi # should exist if Image Region is present      
         try: 
           referenced_sop_instance_uid = roi.ContentSequence[0].referenced_sop_instance_uid
@@ -746,6 +768,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     # read SR using highdicom 
     sr = hd.sr.srread(srFileName)
+
+    # get image region code 
+    image_region_code = self.getHighdicomCode("Image Region")
 
     # will store the info needed for table too. 
     point_infos = [] 
@@ -803,9 +828,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
               content_sequence_name_CodingSchemeDesignator = ContentSequence.name.CodingSchemeDesignator 
               content_sequence_name_CodeMeaning = ContentSequence.name.CodeMeaning
               # if ContentSequence.name is 111030, DCM, Image Region, we skip, as we will be reading this later in the group. 
-              if (content_sequence_name_CodeValue=="111030" and \
-                  content_sequence_name_CodingSchemeDesignator=="DCM" and \
-                  content_sequence_name_CodeMeaning=="Image Region"):
+              # if (content_sequence_name_CodeValue=="111030" and \
+              #     content_sequence_name_CodingSchemeDesignator=="DCM"):
+              if (ContentSequence.name == image_region_code):
                 #continue
                 break
               else:
@@ -827,10 +852,10 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       # print('content_sequence_values: ' + str(content_sequence_values))
       # print('num content_sequence_values: ' + str(len(content_sequence_values)))
 
-      # if (group.reference_type.meaning == "Image Region"): # why meaning instead of CodeMeaning? 
-      if (group.reference_type.value=="111030" and \
-          group.reference_type.scheme_designator=="DCM" and \
-          group.reference_type.meaning=="Image Region"):
+      # Here we check for Image Region 
+      # if (group.reference_type.value=="111030" and \
+      #     group.reference_type.scheme_designator=="DCM"):
+      if (group.reference_type == image_region_code): 
         roi = group.roi # should exist if Image Region is present
         referenced_frame_of_reference_uid = group.roi.ReferencedFrameOfReferenceUID
 
@@ -869,6 +894,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # get the referenced SeriesInstanceUID 
     referenced_series_instance_uid = sr.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
 
+    # get image region code 
+    image_region_code = self.getHighdicomCode("Image Region")
+
     # will store the info needed for table too. 
     line_infos = [] 
 
@@ -890,10 +918,10 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
                                 finding_site.ConceptCodeSequence[0].CodingSchemeDesignator,
                                 finding_site.ConceptCodeSequence[0].CodeMeaning])
 
-      # if (group.reference_type.meaning == "Image Region"): # why meaning instead of CodeMeaning? 
-      if (group.reference_type.value=="111030" and \
-          group.reference_type.scheme_designator=="DCM" and \
-          group.reference_type.meaning=="Image Region"):
+      # Here we check for Image Region 
+      # if (group.reference_type.value=="111030" and \
+      #     group.reference_type.scheme_designator=="DCM"):
+      if (group.reference_type == image_region_code):
 
         roi = group.roi # should exist if Image Region is present      
         try: 
@@ -990,14 +1018,14 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     # get the StudyInstanceUID of the loadable 
     dicomFilePath = loadable.files[0]  # Use the first file in the loadable
-    StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, "0020,000D") 
+    StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, self.getDICOMTagValue("StudyInstanceUID"))  
 
     # Read the dataset to get the Referenced SeriesNumber and SeriesDescription - to name the folder of markups. 
     dataset = pydicom.read_file(dicomFilePath)
     ReferencedSeriesInstanceUID = dataset.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
     fileList = slicer.dicomDatabase.filesForSeries(ReferencedSeriesInstanceUID)
-    ReferencedSeriesNumber = slicer.dicomDatabase.fileValue(fileList[0], "0020,0011")
-    ReferencedSeriesDescription = slicer.dicomDatabase.fileValue(fileList[0], "0008,103E")
+    ReferencedSeriesNumber = slicer.dicomDatabase.fileValue(fileList[0], self.getDICOMTagValue("SeriesNumber")) 
+    ReferencedSeriesDescription = slicer.dicomDatabase.fileValue(fileList[0], self.getDICOMTagValue("SeriesDescription"))
     SeriesDescription = ReferencedSeriesNumber + ': ' + ReferencedSeriesDescription
 
     # Get the studyNode 
@@ -1063,19 +1091,18 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     # get the StudyInstanceUID of the loadable 
     dicomFilePath = loadable.files[0]  # Use the first file in the loadable
-    StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, "0020,000D") 
+    StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, self.getDICOMTagValue("StudyInstanceUID")) 
 
     # For now, read the SR to get the FrameOfReferenceUID - and set this to be the folder name. 
     sr = hd.sr.srread(dicomFilePath)
     FrameOfReferenceUIDs = [] 
-    # create the ImageRegion3D code 
-    image_region_code = hd.sr.value_types.Code(
-        value='111030',
-        scheme_designator='DCM',
-        meaning='Image Region'
-    )
+
+    # get the ImageRegion3D code 
+    image_region_code = self.getHighdicomCode("Image Region")
+
     # First get the planar roi measurement groups 
     groups = sr.content.get_planar_roi_measurement_groups()
+    
     # Then we check if the SR contains a point or not 
     # Iterate through the groups 
     for group in groups: 
@@ -1085,7 +1112,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       except: 
         print('reference_type does not exist for group')
       # If it does equal image_region_code, then check if it's a POINT
-      if (reference_type == image_region_code):
+      if (reference_type == image_region_code): # use actual comparison code 
         try: 
           graphic_type = group.roi.GraphicType
         except: 
@@ -1138,14 +1165,14 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     # get the StudyInstanceUID of the loadable 
     dicomFilePath = loadable.files[0]  # Use the first file in the loadable
-    StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, "0020,000D") 
+    StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, self.getDICOMTagValue("StudyInstanceUID"))  
 
     # Read the dataset to get the Referenced SeriesNumber and SeriesDescription - to name the folder of markups. 
     dataset = pydicom.read_file(dicomFilePath)
     ReferencedSeriesInstanceUID = dataset.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
     fileList = slicer.dicomDatabase.filesForSeries(ReferencedSeriesInstanceUID)
-    ReferencedSeriesNumber = slicer.dicomDatabase.fileValue(fileList[0], "0020,0011")
-    ReferencedSeriesDescription = slicer.dicomDatabase.fileValue(fileList[0], "0008,103E")
+    ReferencedSeriesNumber = slicer.dicomDatabase.fileValue(fileList[0], self.getDICOMTagValue("SeriesNumber")) 
+    ReferencedSeriesDescription = slicer.dicomDatabase.fileValue(fileList[0], self.getDICOMTagValue("SeriesDescription"))
     SeriesDescription = ReferencedSeriesNumber + ': ' + ReferencedSeriesDescription
 
     # Get the studyNode 
