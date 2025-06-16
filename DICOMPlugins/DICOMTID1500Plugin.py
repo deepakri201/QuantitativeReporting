@@ -20,7 +20,6 @@ try:
 except ModuleNotFoundError:
     slicer.util.pip_install("highdicom")
     import highdicom as hd 
-from hd.sr.value_types import Code
 
 
 class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
@@ -62,9 +61,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       isDicomTID1500 = self.isDICOMTID1500(dataset)
 
       if isDicomTID1500:
-        # This function now takes as input the dataset and sr reading from highdicom. 
-        sr = hd.sr.srread(cFile)
-        loadable = self.createLoadableAndAddReferences([dataset], sr)
+        loadable = self.createLoadableAndAddReferences([dataset])
         loadable.files = [cFile]
         loadable.name = seriesDescription + ' - as a DICOM SR TID1500 object'
         loadable.tooltip = loadable.name
@@ -159,11 +156,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     return highdicom_code
 
-  def createLoadableAndAddReferences(self, datasets, sr):
-    """
-    This function now takes as input the datasets (from pydicom) and the sr (from highdicom). 
-    This is done as extracting some fields from highdicom is much more streamlined. 
-    """
+  def createLoadableAndAddReferences(self, datasets):
 
     loadable = DICOMLoadable()
     loadable.selected = True
@@ -179,6 +172,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     segPlugin = slicer.modules.dicomPlugins["DICOMSegmentationPlugin"]()
 
     for dataset in datasets:
+      # We additionally convert the pydicom dataset to a Comprehensive3DSR using highdicom 
+      # Will make it easier to extract certain fields later. 
+      sr = hd.sr.Comprehensive3DSR.from_dataset(dataset)
       uid = self.getDICOMValue(dataset, "SOPInstanceUID")
       loadable.ReferencedSegmentationInstanceUIDs[uid] = []
       if hasattr(dataset, "CurrentRequestedProcedureEvidenceSequence"):
@@ -204,6 +200,66 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       
       ### Additions for handling other SRs ### 
           
+      # We check for FrameOfReferenceUID, and add to the list of loadable.referencedInstanceUIDs 
+      # Please refer to David Clunie's paper for more information about searching for the FrameOfReferenceUIDs
+      # http://dx.doi.org/10.13140/RG.2.2.34520.62725 
+      if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []) and (loadable.referencedInstanceUIDs == []): 
+        print('Check for FrameOfReferenceUID')
+        FrameOfReferenceUIDs = [] 
+        # get the ImageRegion3D code 
+        image_region_code = self.getHighdicomCode("Image Region")
+        # First get the planar roi measurement groups 
+        groups = sr.content.get_planar_roi_measurement_groups()
+        # Then we check if the SR contains a point or not 
+        # Iterate through the groups 
+        for group in groups: 
+          # Check if there is a reference_type, should be ImageRegion
+          try: 
+            reference_type = group.reference_type
+          except: 
+            print('reference_type does not exist for group')
+          # If it does equal image_region_code, then check if it's a POINT
+          if (reference_type == image_region_code):
+            try: 
+              graphic_type = group.roi.GraphicType
+            except: 
+              print('GraphicType does not exist for group.roi')
+            try:
+              value_type = group.roi.value_type 
+            except: 
+              print('ValueType does not exist for group.roi')
+            if (graphic_type == "POINT" and value_type == hd.sr.ValueTypeValues('SCOORD3D')): 
+              FrameOfReferenceUIDs.append(group.roi.ReferencedFrameOfReferenceUID)
+          # unique FrameOfReferenceUIDs 
+          FrameOfReferenceUIDs = list(set(FrameOfReferenceUIDs))
+          # Now we get the SeriesInstanceUIDs in the dicom database that have these FrameOfReferenceUIDs 
+          # We know that the StudyInstanceUID must be the same, so we only check those patients. 
+          StudyInstanceUID = dataset.StudyInstanceUID 
+          # Get the list of series in the database for this study 
+          SeriesInstanceUIDs = slicer.dicomDatabase.seriesForStudy(StudyInstanceUID)
+          # Now get the FrameOfReferenceUIDs for these SeriesInstanceUIDs 
+          possible_SeriesInstanceUIDs = [] 
+          for SeriesInstanceUID in SeriesInstanceUIDs: 
+            FrameOfReferenceUID_forSeries = slicer.dicomDatabase.fileValue(
+                                                      slicer.dicomDatabase.filesForSeries(SeriesInstanceUID)[0], self.getDICOMTagValue("FrameOfReferenceUID")) 
+            # check if this matches any of the FrameOfReferenceUIDs, if so, add to list of possible_SeriesInstanceUIDs  
+            if FrameOfReferenceUID_forSeries in FrameOfReferenceUIDs: 
+              possible_SeriesInstanceUIDs.append(SeriesInstanceUID)
+          # Should already be unique series 
+          possible_SeriesInstanceUIDs = list(set(possible_SeriesInstanceUIDs))
+          # Now get all the instances for these possible_FrameOfReferenceUIDs 
+          if possible_SeriesInstanceUIDs:
+            db = slicer.dicomDatabase
+            SOPInstanceUIDs = [] 
+            for SeriesInstanceUID in possible_SeriesInstanceUIDs: 
+              fileList = db.filesForSeries(SeriesInstanceUID) 
+              for file in fileList: 
+                SOPInstanceUIDs.append(db.fileValue(file, self.getDICOMTagValue("SOPInstanceUID"))) 
+            SOPInstanceUIDs = list(set(SOPInstanceUIDs))
+            # Now add to the loadable.referencedInstanceUIDs 
+            if (SOPInstanceUIDs):
+              loadable.referencedInstanceUIDs += SOPInstanceUIDs 
+        
       # First, since the point/bbox/line SRs have no SEG associated, and therefore no referencedInstanceUIDs were added, we do a special case 
       # We add to the loadable.referencedInstanceUIDs list 
       # This only adds the particular SOPs that the bbox/lines are on. 
@@ -231,57 +287,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           if (SOPInstanceUIDs):
             loadable.referencedInstanceUIDs += SOPInstanceUIDs 
           
-        # We also check for FrameOfReferenceUID, and add to the list of loadable.referencedInstanceUIDs 
-        if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []) and (loadable.referencedInstanceUIDs == []): 
-          print('Check for FrameOfReferenceUID')
-          FrameOfReferenceUIDs = [] 
-          # get the ImageRegion3D code 
-          image_region_code = self.getHighdicomCode("Image Region")
-          # First get the planar roi measurement groups 
-          groups = sr.content.get_planar_roi_measurement_groups()
-          # Then we check if the SR contains a point or not 
-          # Iterate through the groups 
-          for group in groups: 
-            # Check if there is a reference_type, should be ImageRegion
-            try: 
-              reference_type = group.reference_type
-            except: 
-              print('reference_type does not exist for group')
-            # If it does equal image_region_code, then check if it's a POINT
-            if (reference_type == image_region_code):
-              try: 
-                graphic_type = group.roi.GraphicType
-              except: 
-                print('GraphicType does not exist for group.roi')
-              if (graphic_type == "POINT"): 
-                FrameOfReferenceUIDs.append(group.roi.ReferencedFrameOfReferenceUID)
-            # unique FrameOfReferenceUIDs 
-            FrameOfReferenceUIDs = list(set(FrameOfReferenceUIDs))
-            # Now we get the SeriesInstanceUIDs in the dicom database that have these FrameOfReferenceUIDs 
-            # We know that the StudyInstanceUID must be the same, so we only check those patients. 
-            StudyInstanceUID = dataset.StudyInstanceUID 
-            # Get the list of series in the database for this study 
-            SeriesInstanceUIDs = slicer.dicomDatabase.seriesForStudy(StudyInstanceUID)
-            # Now get the FrameOfReferenceUIDs for these SeriesInstanceUIDs 
-            possible_SeriesInstanceUIDs = [] 
-            for SeriesInstanceUID in SeriesInstanceUIDs: 
-              FrameOfReferenceUID_forSeries = slicer.dicomDatabase.fileValue(
-                                                        slicer.dicomDatabase.filesForSeries(SeriesInstanceUID)[0], self.getDICOMTagValue("FrameOfReferenceUID")) 
-              # check if this matches any of the FrameOfReferenceUIDs, if so, add to list of possible_SeriesInstanceUIDs  
-              if FrameOfReferenceUID_forSeries in FrameOfReferenceUIDs: 
-                possible_SeriesInstanceUIDs.append(SeriesInstanceUID)
-            # Now get all the instances for these possible_FrameOfReferenceUIDs 
-            if possible_SeriesInstanceUIDs:
-              db = slicer.dicomDatabase
-              SOPInstanceUIDs = [] 
-              for SeriesInstanceUID in possible_SeriesInstanceUIDs: 
-                fileList = db.filesForSeries(SeriesInstanceUID) 
-                for file in fileList: 
-                  SOPInstanceUIDs.append(db.fileValue(file, self.getDICOMTagValue("SOPInstanceUID"))) 
-              SOPInstanceUIDs = list(set(SOPInstanceUIDs))
-              # Now add to the loadable.referencedInstanceUIDs 
-              if (SOPInstanceUIDs):
-                loadable.referencedInstanceUIDs += SOPInstanceUIDs 
+
 
                       
 
@@ -321,17 +327,15 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       dateTime = ""
     return dateTime
   
-  def checkUsePlugin(self, srFileName):
+  def containsPlanarAnnotations(self, sr):
     """ 
     Checks if the original plugin should be used (tid1500reader) to read the SR, or if specialized 
-    highdicom code should be utilized, in the case of point, bounding box, etc. 
+    highdicom code should be utilized for reading planar annotations, in the case of point,
+    bounding box, etc. 
     """
 
     # default to use the plugin 
-    checkUsePlugin = 1 
-
-    # read the SR using highdicom 
-    sr = hd.sr.srread(srFileName)
+    containsPlanarAnnotations = 1 
 
     # get the image region code 
     image_region_code = self.getHighdicomCode("Image Region")
@@ -346,50 +350,66 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         #     planar_roi_measurement_group.reference_type.scheme_designator=="DCM"): 
           if (planar_roi_measurement_group.roi.value_type == hd.sr.ValueTypeValues('SCOORD') or 
               planar_roi_measurement_group.roi.value_type == hd.sr.ValueTypeValues('SCOORD3D')):
-            checkUsePlugin = 0 
+            containsPlanarAnnotations = 0 
     else:
-      checkUsePlugin = 1 
+      containsPlanarAnnotations = 1 
 
-    return checkUsePlugin
+    return containsPlanarAnnotations
   
-  def checkIfSRContainsBbox(self, srFileName):
+  def checkIfSRContainsBboxWithVolumeReference(self, sr):
     """
-    Checks if the SR contains a bounding box or not. 
+    Checks if the SR contains a bounding box or not.
     """
     geometric_purpose_of_region_code = self.getHighdicomCode("Geometric purpose of region")
     bounded_by_code = self.getHighdicomCode("Bounded by")
 
     # default is that SR does not contain a bounding box 
-    checkIfSRContainsBbox = 0 
-
-    # read the SR using highdicom 
-    sr = hd.sr.srread(srFileName)
+    checkIfSRContainsBboxWithVolumeReference = 0 
 
     # First get the planar roi measurement groups 
     groups = sr.content.get_planar_roi_measurement_groups()
-    num_groups = len(groups)
+    
     # Then we check if the SR contains a bounding box or not 
     for group in groups: 
-      qual_evals = group.get_qualitative_evaluations()
-      for qual_eval in qual_evals: 
-        # Here we check if it is a Geometric purpose of region, and Bounded by 
-        if qual_eval.name == geometric_purpose_of_region_code and qual_eval.value == bounded_by_code: 
-          checkIfSRContainsBbox = 1 
-        else: 
-          checkIfSRContainsBbox = 0 
+      graphic_type = group.roi.GraphicType
+      try:
+        extracted_data_type = group.roi.PixelOriginInterpretation
+      except:
+        extracted_data_type = ""
+      # First check if correct graphic type and extracted data type 
+      # if (graphic_type == 'POLYLINE' and extracted_data_type == "VOLUME"):
+      if (graphic_type == 'POLYLINE'):
+        qual_evals = group.get_qualitative_evaluations()
+        for qual_eval in qual_evals: 
+          # Here we check if it is a Geometric purpose of region, and Bounded by 
+          if qual_eval.name == geometric_purpose_of_region_code and qual_eval.value == bounded_by_code: 
+            checkIfSRContainsBboxWithVolumeReference = 1 
+          else: 
+            checkIfSRContainsBboxWithVolumeReference = 0 
 
-    return checkIfSRContainsBbox 
+    return checkIfSRContainsBboxWithVolumeReference 
   
-  def checkIfSRContainsPoint(self, srFileName): 
+
+      # if (reference_type == image_region_code): 
+      #   try: 
+      #     # type(group.roi) = highdicom.sr.content.ImageRegion3D
+      #     graphic_type = group.roi.GraphicType
+      #   except: 
+      #     print('GraphicType does not exist for group.roi')
+      #   try: 
+      #     extracted_data_type = group.roi.PixelOriginInterpretation
+      #   except: 
+      #     print('PixelOriginInterpretation does not exist for group.roi')
+      #   if (graphic_type == "POLYLINE" and extracted_data_type == "VOLUME"): # and not FRAME  
+      #     checkIfSRContainsPolylineWithVolumeReference = 1 
+  
+  def checkIfSRContains3DPoint(self, sr): 
     """
-    Checks if the SR contains a point. 
+    Checks if the SR contains a 3D point. 
     """
 
     # default is that the SR does not contain a point 
-    checkIfSRContainsPoint = 0 
-
-    # read the SR using highdicom 
-    sr = hd.sr.srread(srFileName)
+    checkIfSRContains3DPoint = 0 
 
     # get the ImageRegion3D code 
     image_region_code = self.getHighdicomCode("Image Region")
@@ -413,21 +433,22 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           graphic_type = group.roi.GraphicType
         except: 
           print('GraphicType does not exist for group.roi')
-        if (graphic_type == "POINT"): 
-          checkIfSRContainsPoint = 1 
+        try:
+          value_type = group.roi.value_type 
+        except: 
+          print('ValueType does not exist for group.roi')
+        if (graphic_type == "POINT" and value_type == hd.sr.ValueTypeValues('SCOORD3D')): 
+          checkIfSRContains3DPoint = 1 
  
-    return checkIfSRContainsPoint 
+    return checkIfSRContains3DPoint 
   
-  def checkIfSRContainsPolyline(self, srFileName): 
+  def checkIfSRContainsPolylineWithVolumeReference(self, sr): 
     """
-    Checks if the SR contains a polyline. 
+    Checks if the SR contains a polyline.
     """
 
     # default is that the SR contains a polyline 
-    checkIfSRContainsPolyline  = 0 
-
-    # read the SR using highdicom 
-    sr = hd.sr.srread(srFileName)
+    checkIfSRContainsPolylineWithVolumeReference  = 0 
 
     # get the ImageRegion3D code 
     image_region_code = self.getHighdicomCode("Image Region")
@@ -451,10 +472,17 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           graphic_type = group.roi.GraphicType
         except: 
           print('GraphicType does not exist for group.roi')
+        try: 
+          extracted_data_type = group.roi.PixelOriginInterpretation
+        except: 
+          print('PixelOriginInterpretation does not exist for group.roi')
+        # if (graphic_type == "POLYLINE" and extracted_data_type == "VOLUME"): 
         if (graphic_type == "POLYLINE"): 
-          checkIfSRContainsPolyline = 1 
+          checkIfSRContainsPolylineWithVolumeReference = 1 
  
-    return checkIfSRContainsPolyline 
+    return checkIfSRContainsPolylineWithVolumeReference 
+  
+
   
   def getIPPFromSOP(self, referenced_sop_instance_uid, referenced_series_instance_uid):
     """
@@ -502,7 +530,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     return 
   
-  def createBboxTable(self, poly_infos):
+  def createBboxTable(self, poly_infos, table_name):
     """
     Create and display a table for the bbox info. 
     """
@@ -510,7 +538,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     tableNode = slicer.vtkMRMLTableNode()
     # slicer.mrmlScene.AddNode(tableNode)
     tableNode.SetAttribute("readonly", "Yes") 
-    tableNode.SetName("Table for bounding boxes")
+    tableNode.SetName(table_name)
 
     # Add columns 
     col = tableNode.AddColumn()
@@ -565,7 +593,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     return tableNode 
   
     
-  def createPointTable(self, point_infos):
+  def createPointTable(self, point_infos, table_name):
     """
     Create and display a table for the point info. 
     """
@@ -573,7 +601,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     tableNode = slicer.vtkMRMLTableNode()
     # slicer.mrmlScene.AddNode(tableNode)
     tableNode.SetAttribute("readonly", "Yes") 
-    tableNode.SetName("Table for points")
+    tableNode.SetName(table_name)
 
     # Add columns 
     col = tableNode.AddColumn()
@@ -641,7 +669,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     return tableNode 
   
-  def createPolylineTable(self, point_infos):
+  def createPolylineTable(self, point_infos, table_name):
     """
     Create and display a table for the polyline info 
     """
@@ -649,7 +677,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     tableNode = slicer.vtkMRMLTableNode()
     # slicer.mrmlScene.AddNode(tableNode)
     tableNode.SetAttribute("readonly", "Yes") 
-    tableNode.SetName("Table for lines")
+    tableNode.SetName(table_name)
 
     # Add columns 
     col = tableNode.AddColumn()
@@ -680,13 +708,16 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     return tableNode 
 
-  def extractBboxMetadataToVtkTableNode(self, srFileName): 
+  def extractBboxMetadataToVtkTableNode(self, sr): 
     """
     Extracts the bounding box metadata from the SR using highdicom, 
     and creates a table node. 
     """
-    # read SR using highdicom 
-    sr = hd.sr.srread(srFileName)
+
+    # We use the SeriesNumber and the SeriesDescription of the SR to name the table
+    SeriesNumber = sr.SeriesNumber
+    SeriesDescription = sr.SeriesDescription
+    table_name = str(SeriesNumber) + ": " + SeriesDescription
 
     # get the referenced SeriesInstanceUID 
     referenced_series_instance_uid = sr.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
@@ -727,7 +758,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
         if (roi.GraphicType=="POLYLINE"):
           bbox = roi.GraphicData 
-          extracted_data_type = roi.PixelOriginInterpretation # Could be frame, or volume, interpretation of points is different then! 
+          # extracted_data_type = roi.PixelOriginInterpretation 
           # calculate the width, height and center, as these are needed for display 
           min_x = np.min([bbox[0], bbox[2], bbox[4], bbox[6]])
           max_x = np.max([bbox[0], bbox[2], bbox[4], bbox[6]])
@@ -756,18 +787,20 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
                         })
 
       # create and display tableNode 
-      tableNode = self.createBboxTable(poly_infos)
+      tableNode = self.createBboxTable(poly_infos, table_name)
 
     return poly_infos, tableNode 
   
-  def extractPointMetadataToVtkTableNode(self, srFileName):
+  def extractPointMetadataToVtkTableNode(self, sr):
     """
     Extracts the point metadata from the SR using highdicom, 
     and creates a table node. 
     """
 
-    # read SR using highdicom 
-    sr = hd.sr.srread(srFileName)
+    # We use the SeriesNumber and the SeriesDescription of the SR to name the table
+    SeriesNumber = sr.SeriesNumber
+    SeriesDescription = sr.SeriesDescription
+    table_name = str(SeriesNumber) + ": " + SeriesDescription
 
     # get image region code 
     image_region_code = self.getHighdicomCode("Image Region")
@@ -857,9 +890,10 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       #     group.reference_type.scheme_designator=="DCM"):
       if (group.reference_type == image_region_code): 
         roi = group.roi # should exist if Image Region is present
-        referenced_frame_of_reference_uid = group.roi.ReferencedFrameOfReferenceUID
-
-        if (roi.GraphicType=="POINT"):
+        graphic_type = roi.GraphicType
+        value_type = roi.value_type
+        if (graphic_type == "POINT" and value_type == hd.sr.ValueTypeValues('SCOORD3D')): 
+          referenced_frame_of_reference_uid = group.roi.ReferencedFrameOfReferenceUID
           extracted_data = roi.GraphicData 
 
       # append to poly_infos
@@ -877,19 +911,21 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
                         })
       
     # create and display tableNode 
-    tableNode = self.createPointTable(point_infos)
+    tableNode = self.createPointTable(point_infos, table_name)
 
     return point_infos, tableNode 
   
-  def extractLineMetadataToVtkTableNode(self, srFileName):
+  def extractLineMetadataToVtkTableNode(self, sr):
 
     """
     Extracts the point metadata from the SR using highdicom, 
     and creates a table node. 
     """
 
-    # read SR using highdicom 
-    sr = hd.sr.srread(srFileName)
+    # We use the SeriesNumber and the SeriesDescription of the SR to name the table
+    SeriesNumber = sr.SeriesNumber
+    SeriesDescription = sr.SeriesDescription
+    table_name = str(SeriesNumber) + ": " + SeriesDescription
 
     # get the referenced SeriesInstanceUID 
     referenced_series_instance_uid = sr.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
@@ -931,7 +967,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
         if (roi.GraphicType=="POLYLINE"):
           polyline = roi.GraphicData 
-          extracted_data_type = roi.PixelOriginInterpretation # Could be frame, or volume, interpretation of points is different then! 
+          # Could be frame, or volume, interpretation of points is different then! 
+          # We have already checked when we load the SR, that we can only handle VOLUME for now.  
+          # extracted_data_type = roi.PixelOriginInterpretation 
           # get the points 
           num_points = np.int32(len(polyline)/2)
           point_line = [] 
@@ -952,7 +990,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
                             })
 
     # create and display tableNode 
-    tableNode = self.createPolylineTable(line_infos)
+    tableNode = self.createPolylineTable(line_infos, table_name)
 
     return line_infos, tableNode 
    
@@ -973,6 +1011,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     """
     # Create ROI node
     roi_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsROINode", bbox_name)
+    # Set it to be locked by default
+    roi_node.SetLocked(True)
     #self.addSeriesInSubjectHierarchy(loadable, roi_node)
     
     # Set the size (width, height, thickness)
@@ -1001,14 +1041,23 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         transform_matrix.SetElement(i, 3, center_ras[i])
     roi_node.SetAndObserveObjectToNodeMatrix(transform_matrix)
 
-    # change size of glyph 
-    display_node = roi_node.GetDisplayNode() 
+    # # change size of glyph 
+    # display_node = roi_node.GetDisplayNode() 
+    # if (display_node):
+    #     display_node.SetGlyphScale(0.75)
+    
+    display_node = roi_node.GetDisplayNode()
+    # Change size of glyph
     if (display_node):
-        display_node.SetGlyphScale(1.0)
+      # display_node.SetGlyphSize(0.75)
+      display_node.SetGlyphScale(1.3)
+    # Change size of interaction handles 
+    if (display_node):
+      display_node.SetInteractionHandleScale(1)
     
     return roi_node 
 
-  def displayBboxMarkups(self, loadable, poly_infos): 
+  def displayBboxMarkups(self, sr, loadable, poly_infos): 
     """
     Displays the bounding box markups. 
     """
@@ -1016,22 +1065,30 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # Get the subject hierarchy
     shNode = slicer.modules.subjecthierarchy.logic().GetSubjectHierarchyNode()
 
-    # get the StudyInstanceUID of the loadable 
-    dicomFilePath = loadable.files[0]  # Use the first file in the loadable
-    StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, self.getDICOMTagValue("StudyInstanceUID"))  
+    # We use the SeriesNumber and the SeriesDescription of the SR to name the folder 
+    SeriesNumber = sr.SeriesNumber
+    SeriesDescription = sr.SeriesDescription
 
-    # Read the dataset to get the Referenced SeriesNumber and SeriesDescription - to name the folder of markups. 
-    dataset = pydicom.read_file(dicomFilePath)
-    ReferencedSeriesInstanceUID = dataset.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
-    fileList = slicer.dicomDatabase.filesForSeries(ReferencedSeriesInstanceUID)
-    ReferencedSeriesNumber = slicer.dicomDatabase.fileValue(fileList[0], self.getDICOMTagValue("SeriesNumber")) 
-    ReferencedSeriesDescription = slicer.dicomDatabase.fileValue(fileList[0], self.getDICOMTagValue("SeriesDescription"))
-    SeriesDescription = ReferencedSeriesNumber + ': ' + ReferencedSeriesDescription
+    # We get the StudyInstanceUID for creating nodes in the subject hierarchy
+    StudyInstanceUID = sr.StudyInstanceUID 
+
+    # # get the StudyInstanceUID of the loadable 
+    # dicomFilePath = loadable.files[0]  # Use the first file in the loadable
+    # StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, self.getDICOMTagValue("StudyInstanceUID"))  
+
+    # # Read the dataset to get the Referenced SeriesNumber and SeriesDescription - to name the folder of markups. 
+    # dataset = pydicom.read_file(dicomFilePath)
+    # ReferencedSeriesInstanceUID = dataset.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
+    # fileList = slicer.dicomDatabase.filesForSeries(ReferencedSeriesInstanceUID)
+    # ReferencedSeriesNumber = slicer.dicomDatabase.fileValue(fileList[0], self.getDICOMTagValue("SeriesNumber")) 
+    # ReferencedSeriesDescription = slicer.dicomDatabase.fileValue(fileList[0], self.getDICOMTagValue("SeriesDescription"))
+    # SeriesDescription = ReferencedSeriesNumber + ': ' + ReferencedSeriesDescription
 
     # Get the studyNode 
     studyNode = shNode.GetItemByUID(slicer.vtkMRMLSubjectHierarchyConstants.GetDICOMUIDName(), StudyInstanceUID)
     # Now create the folder and set the name 
-    bboxFolderID = shNode.CreateFolderItem(studyNode, 'bounding box for: ' + SeriesDescription)
+    # bboxFolderID = shNode.CreateFolderItem(studyNode, 'bounding box for: ' + SeriesDescription)
+    bboxFolderID = shNode.CreateFolderItem(studyNode, str(SeriesNumber) + ': ' + SeriesDescription)
 
     # Order by IPP2 
     poly_infos = sorted(poly_infos, key=lambda x: x['center_z'])
@@ -1048,7 +1105,11 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       center_ras = np.asarray([center_x, center_y, center_z])
       bbox_name = tracking_identifier # for now 
       # create roi 
-      bboxNode = self.create_2d_roi(loadable, center_ras, width, height, slice_normal=(0, 0, 1), thickness=1.0, bbox_name=bbox_name) 
+      bboxNode = self.create_2d_roi(loadable, center_ras, width, height, slice_normal=(0, 0, 1), thickness=0.5, bbox_name=bbox_name) 
+      # # change size of glyph 
+      # display_node = bboxNode.GetDisplayNode() 
+      # if (display_node):
+      #   display_node.SetGlyphScale(0.75)
       markupItemID = shNode.GetItemByDataNode(bboxNode)
       # Set the parent to the folder
       shNode.SetItemParent(markupItemID, bboxFolderID)
@@ -1081,7 +1142,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     return markupsNode
   
-  def displayPointMarkups(self, loadable, point_infos): 
+  def displayPointMarkups(self, sr, loadable, point_infos): 
     """
     Display the point markups. 
     """
@@ -1089,47 +1150,55 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # Get the subject hierarchy
     shNode = slicer.modules.subjecthierarchy.logic().GetSubjectHierarchyNode()
 
-    # get the StudyInstanceUID of the loadable 
-    dicomFilePath = loadable.files[0]  # Use the first file in the loadable
-    StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, self.getDICOMTagValue("StudyInstanceUID")) 
+    # # Get the StudyInstanceUID of the loadable 
+    # dicomFilePath = loadable.files[0]  # Use the first file in the loadable
+    # StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, self.getDICOMTagValue("StudyInstanceUID")) 
+
+    # We use the SeriesNumber and the SeriesDescription of the SR to name the folder 
+    SeriesNumber = sr.SeriesNumber 
+    SeriesDescription = sr.SeriesDescription
+
+    # We get the StudyInstanceUID for creating nodes in the subject hierarchy
+    StudyInstanceUID = sr.StudyInstanceUID 
 
     # For now, read the SR to get the FrameOfReferenceUID - and set this to be the folder name. 
-    sr = hd.sr.srread(dicomFilePath)
-    FrameOfReferenceUIDs = [] 
+    # sr = hd.sr.srread(dicomFilePath)
+    # FrameOfReferenceUIDs = [] 
 
-    # get the ImageRegion3D code 
-    image_region_code = self.getHighdicomCode("Image Region")
+    # # Get the ImageRegion3D code 
+    # image_region_code = self.getHighdicomCode("Image Region")
 
-    # First get the planar roi measurement groups 
-    groups = sr.content.get_planar_roi_measurement_groups()
-    
-    # Then we check if the SR contains a point or not 
-    # Iterate through the groups 
-    for group in groups: 
-      # Check if there is a reference_type, should be ImageRegion
-      try: 
-        reference_type = group.reference_type
-      except: 
-        print('reference_type does not exist for group')
-      # If it does equal image_region_code, then check if it's a POINT
-      if (reference_type == image_region_code): # use actual comparison code 
-        try: 
-          graphic_type = group.roi.GraphicType
-        except: 
-          print('GraphicType does not exist for group.roi')
-        if (graphic_type == "POINT"): 
-          FrameOfReferenceUIDs.append(group.roi.ReferencedFrameOfReferenceUID)
-      # unique FrameOfReferenceUIDs 
-      FrameOfReferenceUIDs = list(set(FrameOfReferenceUIDs))
-    if (len(FrameOfReferenceUIDs)==1):
-      SeriesDescription = FrameOfReferenceUIDs[0]
-    else:
-      SeriesDescription = FrameOfReferenceUIDs
+    # # First get the planar roi measurement groups 
+    # groups = sr.content.get_planar_roi_measurement_groups()
+
+    # # Then we check if the SR contains a point or not 
+    # # Iterate through the groups 
+    # for group in groups: 
+    #   # Check if there is a reference_type, should be ImageRegion
+    #   try: 
+    #     reference_type = group.reference_type
+    #   except: 
+    #     print('reference_type does not exist for group')
+    #   # If it does equal image_region_code, then check if it's a POINT
+    #   if (reference_type == image_region_code): # use actual comparison code 
+    #     try: 
+    #       graphic_type = group.roi.GraphicType
+    #     except: 
+    #       print('GraphicType does not exist for group.roi')
+    #     if (graphic_type == "POINT"): 
+    #       FrameOfReferenceUIDs.append(group.roi.ReferencedFrameOfReferenceUID)
+    #   # unique FrameOfReferenceUIDs 
+    #   FrameOfReferenceUIDs = list(set(FrameOfReferenceUIDs))
+    # if (len(FrameOfReferenceUIDs)==1):
+    #   SeriesDescription = FrameOfReferenceUIDs[0]
+    # else:
+    #   SeriesDescription = FrameOfReferenceUIDs
 
     # Get the studyNode 
     studyNode = shNode.GetItemByUID(slicer.vtkMRMLSubjectHierarchyConstants.GetDICOMUIDName(), StudyInstanceUID)
     # Now create the folder and set the name 
-    pointsFolderID = shNode.CreateFolderItem(studyNode, 'points for FrameOfReferenceUID: ' + str(SeriesDescription))
+    # pointsFolderID = shNode.CreateFolderItem(studyNode, 'points for FrameOfReferenceUID: ' + str(SeriesDescription))
+    pointsFolderID = shNode.CreateFolderItem(studyNode, str(SeriesNumber) + ': ' + SeriesDescription)
 
     # # Read the dataset to get the Referenced SeriesNumber and SeriesDescription - to name the folder of markups. 
     # dataset = pydicom.read_file(dicomFilePath)
@@ -1146,6 +1215,11 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       point_z = p['point'][2]
       # index should always be 0. not i. 
       pointsNode = self.create_3d_point(loadable, 0, point_x, point_y, point_z, point_text)
+      # change size of glyph 
+      display_node = pointsNode.GetDisplayNode() 
+      if (display_node):
+        display_node.SetGlyphScale(0.75)
+
       markupItemID = shNode.GetItemByDataNode(pointsNode)
       # Set the parent to the folder
       shNode.SetItemParent(markupItemID, pointsFolderID)
@@ -1155,7 +1229,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     
     return 
   
-  def displayLineMarkups(self, loadable, line_infos):
+  def displayLineMarkups(self, sr, loadable, line_infos):
     """
     Display the line markups. 
     """
@@ -1163,22 +1237,30 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # Get the subject hierarchy
     shNode = slicer.modules.subjecthierarchy.logic().GetSubjectHierarchyNode()
 
-    # get the StudyInstanceUID of the loadable 
-    dicomFilePath = loadable.files[0]  # Use the first file in the loadable
-    StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, self.getDICOMTagValue("StudyInstanceUID"))  
+    # We use the SeriesNumber and the SeriesDescription of the SR to name the folder 
+    SeriesNumber = sr.SeriesNumber 
+    SeriesDescription = sr.SeriesDescription
 
-    # Read the dataset to get the Referenced SeriesNumber and SeriesDescription - to name the folder of markups. 
-    dataset = pydicom.read_file(dicomFilePath)
-    ReferencedSeriesInstanceUID = dataset.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
-    fileList = slicer.dicomDatabase.filesForSeries(ReferencedSeriesInstanceUID)
-    ReferencedSeriesNumber = slicer.dicomDatabase.fileValue(fileList[0], self.getDICOMTagValue("SeriesNumber")) 
-    ReferencedSeriesDescription = slicer.dicomDatabase.fileValue(fileList[0], self.getDICOMTagValue("SeriesDescription"))
-    SeriesDescription = ReferencedSeriesNumber + ': ' + ReferencedSeriesDescription
+    # We get the StudyInstanceUID for creating nodes in the subject hierarchy
+    StudyInstanceUID = sr.StudyInstanceUID 
+
+    # # get the StudyInstanceUID of the loadable 
+    # dicomFilePath = loadable.files[0]  # Use the first file in the loadable
+    # StudyInstanceUID = slicer.dicomDatabase.fileValue(dicomFilePath, self.getDICOMTagValue("StudyInstanceUID"))  
+
+    # # Read the dataset to get the Referenced SeriesNumber and SeriesDescription - to name the folder of markups. 
+    # dataset = pydicom.read_file(dicomFilePath)
+    # ReferencedSeriesInstanceUID = dataset.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
+    # fileList = slicer.dicomDatabase.filesForSeries(ReferencedSeriesInstanceUID)
+    # ReferencedSeriesNumber = slicer.dicomDatabase.fileValue(fileList[0], self.getDICOMTagValue("SeriesNumber")) 
+    # ReferencedSeriesDescription = slicer.dicomDatabase.fileValue(fileList[0], self.getDICOMTagValue("SeriesDescription"))
+    # SeriesDescription = ReferencedSeriesNumber + ': ' + ReferencedSeriesDescription
 
     # Get the studyNode 
     studyNode = shNode.GetItemByUID(slicer.vtkMRMLSubjectHierarchyConstants.GetDICOMUIDName(), StudyInstanceUID)
     # Now create the folder and set the name 
-    linesFolderID = shNode.CreateFolderItem(studyNode, 'lines for: ' + SeriesDescription)
+    # linesFolderID = shNode.CreateFolderItem(studyNode, 'lines for: ' + SeriesDescription)
+    linesFolderID = shNode.CreateFolderItem(studyNode, str(SeriesNumber) + ': ' + SeriesDescription)
 
     # Create all the line nodes 
     for i,p in enumerate(line_infos):
@@ -1186,6 +1268,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       polyline = p['polyline']
       # add new node 
       lineNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsLineNode", line_text)
+      # Set to locked by default
+      lineNode.SetLocked(True)
       # self.addSeriesInSubjectHierarchy(loadable, lineNode)
       # get number of points 
       num_points = len(polyline)
@@ -1200,6 +1284,10 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           slicer.modules.markups.logic().JumpSlicesToLocation(point_x, point_y, point_z, True)
       # do not display the length measurement 
       lineNode.GetMeasurement('length').SetEnabled(False)
+      # change size of glyph 
+      display_node = lineNode.GetDisplayNode() 
+      if (display_node):
+        display_node.SetGlyphScale(0.75)
       # Add to subject hierarchy
       #self.addSeriesInSubjectHierarchy(loadable, lineNode)
       # Get the Subject Hierarchy item ID for the markup node
@@ -1253,13 +1341,17 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         logging.debug('Failed to get the filename from the DICOM database for ', uid)
         return False
       
-      # check if the plugin (tid1500reader) should be used or specialized highdicom code
-      # sets the self.usePlugin = 0 or 1. 
-      checkUsePlugin = self.checkUsePlugin(srFileName) 
-      print('checkUsePlugin: ' + str(checkUsePlugin))
+      # Read the SR once
+      sr = hd.sr.srread(srFileName)
+      
+      # Check if the plugin (tid1500reader) should be used or specialized highdicom code
+      # to read the planar annotations 
+      # sets the self.containsPlanarAnnotations = 0 or 1. 
+      containsPlanarAnnotations = self.containsPlanarAnnotations(sr) 
+      print('containsPlanarAnnotations: ' + str(containsPlanarAnnotations))
 
       # use plugin to read the SR 
-      if (checkUsePlugin):
+      if (containsPlanarAnnotations):
 
         param = {
           "inputSRFileName": srFileName,
@@ -1314,33 +1406,33 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         # print('in load function: num unique loadable.referencedInstanceUIDs:' + str(len(list(set(loadable.referencedInstanceUIDs)))))
 
         # check if contains a point, bbox, polyline 
-        checkIfSRContainsBbox = self.checkIfSRContainsBbox(srFileName)
-        checkIfSRContainsPoint = self.checkIfSRContainsPoint(srFileName)
-        checkIfSRContainsPolyline = self.checkIfSRContainsPolyline(srFileName)
+        checkIfSRContainsBboxWithVolumeReference = self.checkIfSRContainsBboxWithVolumeReference(sr)
+        checkIfSRContains3DPoint = self.checkIfSRContains3DPoint(sr)
+        checkIfSRContainsPolylineWithVolumeReference = self.checkIfSRContainsPolylineWithVolumeReference(sr)
 
         # if bbox 
-        if (checkIfSRContainsBbox): 
-          print('SR contains bounding box')
-          bboxInfo, bboxTableNode = self.extractBboxMetadataToVtkTableNode(srFileName)
+        if (checkIfSRContainsBboxWithVolumeReference): 
+          print('SR contains bounding box with volume reference')
+          bboxInfo, bboxTableNode = self.extractBboxMetadataToVtkTableNode(sr)
           self.showTable(bboxTableNode)
           self.addSeriesInSubjectHierarchy(loadable, bboxTableNode)
-          self.displayBboxMarkups(loadable, bboxInfo)
+          self.displayBboxMarkups(sr, loadable, bboxInfo)
 
         # if point 
-        if (checkIfSRContainsPoint):
-            print('SR contains point')
-            pointInfo, pointTableNode = self.extractPointMetadataToVtkTableNode(srFileName)
+        if (checkIfSRContains3DPoint):
+            print('SR contains 3D point')
+            pointInfo, pointTableNode = self.extractPointMetadataToVtkTableNode(sr)
             self.showTable(pointTableNode)
             self.addSeriesInSubjectHierarchy(loadable, pointTableNode)
-            self.displayPointMarkups(loadable, pointInfo)
+            self.displayPointMarkups(sr, loadable, pointInfo)
 
         # if polyline but not bbox 
-        if (checkIfSRContainsPolyline==1 and checkIfSRContainsBbox==0):
-            print('SR contains a polyline but not a bbox')
-            lineInfo, lineTableNode = self.extractLineMetadataToVtkTableNode(srFileName)
+        if (checkIfSRContainsPolylineWithVolumeReference==1 and checkIfSRContainsBboxWithVolumeReference==0):
+            print('SR contains a polyline, with a volume reference, and not a bbox')
+            lineInfo, lineTableNode = self.extractLineMetadataToVtkTableNode(sr)
             self.showTable(lineTableNode)
             self.addSeriesInSubjectHierarchy(loadable, lineTableNode)
-            self.displayLineMarkups(loadable, lineInfo)
+            self.displayLineMarkups(sr, loadable, lineInfo)
             # create folder in subject hierarchy
             # shNode = slicer.modules.subjecthierarchy.logic().GetSubjectHierarchyNode()
             # linesDirectory = shNode.CreateFolderItem(shNode.GetSceneItemID(), "lines") # later use a better descriptor 
