@@ -1054,6 +1054,10 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # Change size of interaction handles 
     if (display_node):
       display_node.SetInteractionHandleScale(1)
+
+    roi_node.GetDisplayNode().SetHandlesInteractive(False)
+    for controlPointIndex in range(roi_node.GetNumberOfControlPoints()):
+      roi_node.SetNthControlPointLocked(controlPointIndex, True)
     
     return roi_node 
 
@@ -1134,6 +1138,10 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     markupsNode.AddControlPoint([point_x, point_y, point_z])
     markupsNode.SetName(point_text)
     markupsNode.SetNthControlPointLabel(point_index, point_text)
+
+    markupsNode.GetDisplayNode().SetHandlesInteractive(False)
+    for controlPointIndex in range(markupsNode.GetNumberOfControlPoints()):
+      markupsNode.SetNthControlPointLocked(controlPointIndex, True)
 
     # self.addSeriesInSubjectHierarchy(loadable, markupsNode)
 
@@ -1286,6 +1294,11 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       lineNode.GetMeasurement('length').SetEnabled(False)
       # change size of glyph 
       display_node = lineNode.GetDisplayNode() 
+      # lock the dispay 
+      lineNode.GetDisplayNode().SetHandlesInteractive(False)
+      for controlPointIndex in range(lineNode.GetNumberOfControlPoints()):
+          lineNode.SetNthControlPointLocked(controlPointIndex, True)
+
       if (display_node):
         display_node.SetGlyphScale(0.75)
       # Add to subject hierarchy
