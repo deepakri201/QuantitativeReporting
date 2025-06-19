@@ -9,6 +9,7 @@ import numpy
 import numpy as np 
 import random
 import pydicom
+from pydicom.sr.codedict import codes
 
 import slicer
 from DICOMLib import DICOMLoadable
@@ -24,11 +25,11 @@ except ModuleNotFoundError:
 
 class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
-  UID_EnhancedSRStorage = "1.2.840.10008.5.1.4.1.1.88.22"
-  UID_ComprehensiveSRStorage = "1.2.840.10008.5.1.4.1.1.88.33"
-  UID_Comprehensive3DSRStorage = "1.2.840.10008.5.1.4.1.1.88.34"
-  UID_SegmentationStorage = "1.2.840.10008.5.1.4.1.1.66.4"
-  UID_RealWorldValueMappingStorage = "1.2.840.10008.5.1.4.1.1.67"
+  UID_EnhancedSRStorage = pydicom.uid.EnhancedSRStorage
+  UID_ComprehensiveSRStorage = pydicom.uid.ComprehensiveSRStorage
+  UID_Comprehensive3DSRStorage = pydicom.uid.Comprehensive3DSRStorage
+  UID_SegmentationStorage = pydicom.uid.SegmentationStorage
+  UID_RealWorldValueMappingStorage = pydicom.uid.RealWorldValueMappingStorage
 
   def __init__(self):
     DICOMPluginBase.__init__(self)
@@ -129,16 +130,12 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     
     return tag_numeric
   
-  def getHighdicomCode(self, tag_name): 
+  def getSRCode(self, tag_name):
     """This function takes as input a standardized string, and returns 
-    the highdicom Code"""
+    the highdicom code, either using pydicom or defining it"""
 
     if (tag_name == "Image Region"): 
-      highdicom_code = hd.sr.value_types.Code(
-                        value='111030',
-                        scheme_designator='DCM',
-                        meaning='Image Region'
-                      )
+      highdicom_code = codes.DCM.ImageRegion # instead of using hd.sr.value_types.Code(value='111030',scheme_designator='DCM',meaning='Image Region')
     elif (tag_name == "Geometric purpose of region"): 
       highdicom_code = hd.sr.value_types.Code(
                         value='130400',
@@ -150,7 +147,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
                         value='75958009',
                         scheme_designator='SCT',
                         meaning='Bounded by'
-                      )
+                      ) # codes.SCT.BoundedBy from pydicom does not exist. 
     else: 
       highdicom_code = ""
 
@@ -172,9 +169,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     segPlugin = slicer.modules.dicomPlugins["DICOMSegmentationPlugin"]()
 
     for dataset in datasets:
-      # We additionally convert the pydicom dataset to a Comprehensive3DSR using highdicom 
-      # Will make it easier to extract certain fields later. 
-      sr = hd.sr.Comprehensive3DSR.from_dataset(dataset)
+      
       uid = self.getDICOMValue(dataset, "SOPInstanceUID")
       loadable.ReferencedSegmentationInstanceUIDs[uid] = []
       if hasattr(dataset, "CurrentRequestedProcedureEvidenceSequence"):
@@ -200,38 +195,66 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       
       ### Additions for handling other SRs ### 
           
+      # We additionally convert the pydicom dataset to a Comprehensive3DSR using highdicom 
+      # Will make it easier to extract certain fields later. 
+      # sr = hd.sr.Comprehensive3DSR.from_dataset(dataset)
+      sr_class_map = {
+          pydicom.uid.EnhancedSRStorage: hd.sr.EnhancedSR,
+          pydicom.uid.ComprehensiveSRStorage: hd.sr.ComprehensiveSR,
+          pydicom.uid.Comprehensive3DSRStorage: hd.sr.Comprehensive3DSR,
+      }
+      # Get the SOP Class UID from the dataset
+      sop_class_uid = dataset.SOPClassUID
+      # Retrieve the correct SR class from the dictionary
+      sr_class = sr_class_map.get(sop_class_uid)
+      # Instantiate the correct SR object
+      if sr_class is not None:
+        sr = sr_class.from_dataset(dataset, copy=False)
+      else:
+        raise ValueError(f"Unsupported SOP Class UID: {sop_class_uid}")
+                
       # We check for FrameOfReferenceUID, and add to the list of loadable.referencedInstanceUIDs 
       # Please refer to David Clunie's paper for more information about searching for the FrameOfReferenceUIDs
       # http://dx.doi.org/10.13140/RG.2.2.34520.62725 
       if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []) and (loadable.referencedInstanceUIDs == []): 
+
         print('Check for FrameOfReferenceUID')
         FrameOfReferenceUIDs = [] 
-        # get the ImageRegion3D code 
-        image_region_code = self.getHighdicomCode("Image Region")
+        # get the ImageRegion code 
+        image_region_code = self.getSRCode("Image Region")
         # First get the planar roi measurement groups 
-        groups = sr.content.get_planar_roi_measurement_groups()
+        # groups = sr.content.get_planar_roi_measurement_groups()
+        groups = sr.content.get_planar_roi_measurement_groups(
+                  graphic_type=hd.sr.GraphicTypeValues3D.POINT,
+                  reference_type=codes.DCM.ImageRegion,
+              )
         # Then we check if the SR contains a point or not 
         # Iterate through the groups 
         for group in groups: 
-          # Check if there is a reference_type, should be ImageRegion
-          try: 
-            reference_type = group.reference_type
-          except: 
-            print('reference_type does not exist for group')
-          # If it does equal image_region_code, then check if it's a POINT
-          if (reference_type == image_region_code):
-            try: 
-              graphic_type = group.roi.GraphicType
-            except: 
-              print('GraphicType does not exist for group.roi')
-            try:
-              value_type = group.roi.value_type 
-            except: 
-              print('ValueType does not exist for group.roi')
-            if (graphic_type == "POINT" and value_type == hd.sr.ValueTypeValues('SCOORD3D')): 
-              FrameOfReferenceUIDs.append(group.roi.ReferencedFrameOfReferenceUID)
-          # unique FrameOfReferenceUIDs 
-          FrameOfReferenceUIDs = list(set(FrameOfReferenceUIDs))
+          # # Check if there is a reference_type, should be ImageRegion
+          # try: 
+          #   reference_type = group.reference_type
+          # except: 
+          #   print('reference_type does not exist for group')
+          # # If it does equal image_region_code, then check if it's a POINT
+          # if (reference_type == image_region_code):
+          #   try: 
+          #     graphic_type = group.roi.GraphicType
+          #   except: 
+          #     print('GraphicType does not exist for group.roi')
+          #   try:
+          #     value_type = group.roi.value_type 
+          #   except: 
+          #     print('ValueType does not exist for group.roi')
+          #   if (graphic_type == "POINT" and value_type == hd.sr.ValueTypeValues('SCOORD3D')): 
+          #     FrameOfReferenceUIDs.append(group.roi.ReferencedFrameOfReferenceUID)
+          # # unique FrameOfReferenceUIDs 
+          # FrameOfReferenceUIDs = list(set(FrameOfReferenceUIDs))
+
+
+          FrameOfReferenceUIDs = group.roi.frame_of_reference_uid
+
+
           # Now we get the SeriesInstanceUIDs in the dicom database that have these FrameOfReferenceUIDs 
           # We know that the StudyInstanceUID must be the same, so we only check those patients. 
           StudyInstanceUID = dataset.StudyInstanceUID 
@@ -335,10 +358,10 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     """
 
     # default to use the plugin 
-    containsPlanarAnnotations = 1 
+    containsPlanarAnnotations = 0 
 
     # get the image region code 
-    image_region_code = self.getHighdicomCode("Image Region")
+    image_region_code = self.getSRCode("Image Region")
 
     planar_roi_measurement_groups = sr.content.get_planar_roi_measurement_groups()
     num_planar_roi_measurement_groups = len(planar_roi_measurement_groups)
@@ -346,143 +369,48 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       for planar_roi_measurement_group in planar_roi_measurement_groups: 
         # Here we check if it is an Image Region 
         if (planar_roi_measurement_group.reference_type == image_region_code):
-        # if (planar_roi_measurement_group.reference_type.value=="111030" and \
-        #     planar_roi_measurement_group.reference_type.scheme_designator=="DCM"): 
           if (planar_roi_measurement_group.roi.value_type == hd.sr.ValueTypeValues('SCOORD') or 
               planar_roi_measurement_group.roi.value_type == hd.sr.ValueTypeValues('SCOORD3D')):
-            containsPlanarAnnotations = 0 
+            containsPlanarAnnotations = 1
     else:
-      containsPlanarAnnotations = 1 
+      containsPlanarAnnotations = 0 
 
     return containsPlanarAnnotations
   
-  def checkIfSRContainsBboxWithVolumeReference(self, sr):
+  def checkIfSRContainsGeometry(self, sr, geometry_type='bbox'):
+    """ 
+    Checks if the SR contains a bbox, polyline, or point3D
     """
-    Checks if the SR contains a bounding box or not.
-    """
-    geometric_purpose_of_region_code = self.getHighdicomCode("Geometric purpose of region")
-    bounded_by_code = self.getHighdicomCode("Bounded by")
 
-    # default is that SR does not contain a bounding box 
-    checkIfSRContainsBboxWithVolumeReference = 0 
+    # If SR contains a bounding box 
+    if (geometry_type == "bbox"):
+      for group in sr.content.get_planar_roi_measurement_groups():
+        for eval in group.get_qualitative_evaluations(
+              name=self.getSRCode("Geometric purpose of region"),
+        ):
+            if eval.value == self.getSRCode("Bounded by"): 
+                return True
+      return False
 
-    # First get the planar roi measurement groups 
-    groups = sr.content.get_planar_roi_measurement_groups()
+    # If SR contains a POLYLINE
+    elif (geometry_type == "polyline"):
+      groups = sr.content.get_planar_roi_measurement_groups(
+        reference_type=self.getSRCode("Image Region"),
+        graphic_type=hd.sr.GraphicTypeValues.POLYLINE, 
+      )  
+      return len(groups) >= 1
+
+    # If SR contains SCOORD3D 
+    elif (geometry_type == "point3D"):
+      # groups = sr.content.get_planar_roi_measurement_groups(reference_type=self.getSRCode("Image Region"),graphic_type=hd.sr.GraphicTypeValues3D.POINT)
+      groups = sr.content.get_planar_roi_measurement_groups(reference_type=codes.DCM.ImageRegion,graphic_type=hd.sr.GraphicTypeValues3D.POINT)
+      return len(groups) >= 1
     
-    # Then we check if the SR contains a bounding box or not 
-    for group in groups: 
-      graphic_type = group.roi.GraphicType
-      try:
-        extracted_data_type = group.roi.PixelOriginInterpretation
-      except:
-        extracted_data_type = ""
-      # First check if correct graphic type and extracted data type 
-      # if (graphic_type == 'POLYLINE' and extracted_data_type == "VOLUME"):
-      if (graphic_type == 'POLYLINE'):
-        qual_evals = group.get_qualitative_evaluations()
-        for qual_eval in qual_evals: 
-          # Here we check if it is a Geometric purpose of region, and Bounded by 
-          if qual_eval.name == geometric_purpose_of_region_code and qual_eval.value == bounded_by_code: 
-            checkIfSRContainsBboxWithVolumeReference = 1 
-          else: 
-            checkIfSRContainsBboxWithVolumeReference = 0 
+    # If SR contains unknown geometry 
+    else:
+      print('Cannot read SR with geometry: ' + str(geometry_type))
 
-    return checkIfSRContainsBboxWithVolumeReference 
-  
-
-      # if (reference_type == image_region_code): 
-      #   try: 
-      #     # type(group.roi) = highdicom.sr.content.ImageRegion3D
-      #     graphic_type = group.roi.GraphicType
-      #   except: 
-      #     print('GraphicType does not exist for group.roi')
-      #   try: 
-      #     extracted_data_type = group.roi.PixelOriginInterpretation
-      #   except: 
-      #     print('PixelOriginInterpretation does not exist for group.roi')
-      #   if (graphic_type == "POLYLINE" and extracted_data_type == "VOLUME"): # and not FRAME  
-      #     checkIfSRContainsPolylineWithVolumeReference = 1 
-  
-  def checkIfSRContains3DPoint(self, sr): 
-    """
-    Checks if the SR contains a 3D point. 
-    """
-
-    # default is that the SR does not contain a point 
-    checkIfSRContains3DPoint = 0 
-
-    # get the ImageRegion3D code 
-    image_region_code = self.getHighdicomCode("Image Region")
-
-    # First get the planar roi measurement groups 
-    groups = sr.content.get_planar_roi_measurement_groups()
-    num_groups = len(groups)
-
-    # Then we check if the SR contains a point or not 
-    # Iterate through the groups 
-    for group in groups: 
-      # Check if there is a reference_type, should be Image Region
-      try: 
-        reference_type = group.reference_type
-      except: 
-        print('reference_type does not exist for group')
-      # If it does equal image_region_code, then check if it's a POINT
-      if (reference_type == image_region_code): 
-        try: 
-          # type(group.roi) = highdicom.sr.content.ImageRegion3D
-          graphic_type = group.roi.GraphicType
-        except: 
-          print('GraphicType does not exist for group.roi')
-        try:
-          value_type = group.roi.value_type 
-        except: 
-          print('ValueType does not exist for group.roi')
-        if (graphic_type == "POINT" and value_type == hd.sr.ValueTypeValues('SCOORD3D')): 
-          checkIfSRContains3DPoint = 1 
- 
-    return checkIfSRContains3DPoint 
-  
-  def checkIfSRContainsPolylineWithVolumeReference(self, sr): 
-    """
-    Checks if the SR contains a polyline.
-    """
-
-    # default is that the SR contains a polyline 
-    checkIfSRContainsPolylineWithVolumeReference  = 0 
-
-    # get the ImageRegion3D code 
-    image_region_code = self.getHighdicomCode("Image Region")
-
-    # First get the planar roi measurement groups 
-    groups = sr.content.get_planar_roi_measurement_groups()
-    num_groups = len(groups)
-
-    # Then we check if the SR contains a polyline or not 
-    # Iterate through the groups 
-    for group in groups: 
-      # Check if there is a reference_type, should be Image Region
-      try: 
-        reference_type = group.reference_type
-      except: 
-        print('reference_type does not exist for group')
-      # If it does equal image_region_code, then check if it's a POINT
-      if (reference_type == image_region_code): 
-        try: 
-          # type(group.roi) = highdicom.sr.content.ImageRegion3D
-          graphic_type = group.roi.GraphicType
-        except: 
-          print('GraphicType does not exist for group.roi')
-        try: 
-          extracted_data_type = group.roi.PixelOriginInterpretation
-        except: 
-          print('PixelOriginInterpretation does not exist for group.roi')
-        # if (graphic_type == "POLYLINE" and extracted_data_type == "VOLUME"): 
-        if (graphic_type == "POLYLINE"): 
-          checkIfSRContainsPolylineWithVolumeReference = 1 
- 
-    return checkIfSRContainsPolylineWithVolumeReference 
-  
-
+    return False
   
   def getIPPFromSOP(self, referenced_sop_instance_uid, referenced_series_instance_uid):
     """
@@ -511,9 +439,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     # Now get the IPP for the corresponding SOPInstanceUID 
     ipp = IPP_list[index]
-
-    # instance_uids = db.instancesForSeries(referenced_series_instance_uid) # this gets the SOPInstanceUIDs, but we need the filenames 
-    # print(slicer.dicomDatabase.instanceValue(instUids[0], '0010,0010')) # patient name
 
     return ipp 
   
@@ -707,7 +632,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       tableNode.SetCellText(rowIndex, 3, polyline_str) 
 
     return tableNode 
-
+  
   def extractBboxMetadataToVtkTableNode(self, sr): 
     """
     Extracts the bounding box metadata from the SR using highdicom, 
@@ -723,7 +648,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     referenced_series_instance_uid = sr.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
 
     # get the image_region_code 
-    image_region_code = self.getHighdicomCode("Image Region")
+    image_region_code = self.getSRCode("Image Region")
 
     # will store the info needed for table too. 
     poly_infos = [] 
@@ -741,35 +666,24 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       finding_type = [group.finding_type.CodeValue, group.finding_type.CodingSchemeDesignator, group.finding_type.CodeMeaning]
       finding_sites = []
       for finding_site in group.finding_sites:
-        if hasattr(finding_site, 'ConceptCodeSequence') and finding_site.ConceptCodeSequence:
-          finding_sites.append([finding_site.ConceptCodeSequence[0].CodeValue, 
-                                finding_site.ConceptCodeSequence[0].CodingSchemeDesignator,
-                                finding_site.ConceptCodeSequence[0].CodeMeaning])
+        finding_sites.append([finding_site.value.CodeValue, 
+                              finding_site.value.CodingSchemeDesignator, 
+                              finding_site.value.CodeMeaning])
+      # Get the Image Region 
+      referenced_sop_instance_uid = group.roi.ContentSequence[0].referenced_sop_instance_uid
+      bbox = group.roi.value 
 
-      # Here we check for Image Region
-      # if (group.reference_type.value=="111030" and \
-      #     group.reference_type.scheme_designator=="DCM"):
-      if (group.reference_type == image_region_code):
-        roi = group.roi # should exist if Image Region is present      
-        try: 
-          referenced_sop_instance_uid = roi.ContentSequence[0].referenced_sop_instance_uid
-        except: 
-          print('Cannot access referenced SOPInstanceUID')
-
-        if (roi.GraphicType=="POLYLINE"):
-          bbox = roi.GraphicData 
-          # extracted_data_type = roi.PixelOriginInterpretation 
-          # calculate the width, height and center, as these are needed for display 
-          min_x = np.min([bbox[0], bbox[2], bbox[4], bbox[6]])
-          max_x = np.max([bbox[0], bbox[2], bbox[4], bbox[6]])
-          min_y = np.min([bbox[1], bbox[3], bbox[5], bbox[7]])
-          max_y = np.max([bbox[1], bbox[3], bbox[5], bbox[7]])
-          width = max_x - min_x 
-          height = max_y - min_y 
-          center_x = min_x + width/2
-          center_y = min_y + height/2 
-          center_z = self.getIPPFromSOP(referenced_sop_instance_uid, 
-                                        referenced_series_instance_uid)[2] 
+      # calculate the width, height and center, as these are needed for display 
+      min_x = np.min([bbox[0,0], bbox[1,0], bbox[2,0], bbox[3,0]]) # using roi.GraphicData: min_x = np.min([bbox[0], bbox[2], bbox[4], bbox[6]])
+      max_x = np.max([bbox[0,0], bbox[1,0], bbox[2,0], bbox[3,0]]) # using roi.GraphicData: max_x = np.max([bbox[0], bbox[2], bbox[4], bbox[6]])
+      min_y = np.min([bbox[0,1], bbox[1,1], bbox[2,1], bbox[3,1]]) # using roi.GraphicData: min_y = np.min([bbox[1], bbox[3], bbox[5], bbox[7]])
+      max_y = np.max([bbox[0,1], bbox[1,1], bbox[2,1], bbox[3,1]]) # using roi.GraphicData: max_y = np.max([bbox[1], bbox[3], bbox[5], bbox[7]])
+      width = max_x - min_x 
+      height = max_y - min_y 
+      center_x = min_x + width/2
+      center_y = min_y + height/2 
+      center_z = self.getIPPFromSOP(referenced_sop_instance_uid, 
+                                    referenced_series_instance_uid)[2] 
       
       # append to poly_infos
       poly_infos.append({
@@ -778,7 +692,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
                          "SOPInstanceUID" : referenced_sop_instance_uid, 
                          "FindingType": finding_type, 
                          "FindingSite": finding_sites,
-                         "polyline": [[bbox[0],bbox[1]], [bbox[2],bbox[3]], [bbox[4],bbox[5]], [bbox[6],bbox[7]]], 
+                         "polyline": bbox, # using roi.GraphicData: [[bbox[0],bbox[1]], [bbox[2],bbox[3]], [bbox[4],bbox[5]], [bbox[6],bbox[7]]], 
                          "width": width, 
                          "height": height,
                          "center_x": -center_x, # for display in Slicer, negate this. 
@@ -803,99 +717,53 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     table_name = str(SeriesNumber) + ": " + SeriesDescription
 
     # get image region code 
-    image_region_code = self.getHighdicomCode("Image Region")
+    image_region_code = self.getSRCode("Image Region")
 
     # will store the info needed for table too. 
     point_infos = [] 
 
     # First get the planar roi measurement gorups 
-    groups = sr.content.get_planar_roi_measurement_groups()
-
+    groups = sr.content.get_planar_roi_measurement_groups(graphic_type=hd.sr.GraphicTypeValues3D.POINT,reference_type=codes.DCM.ImageRegion)
+  
+    # Iterate through each group 
     for group in groups: 
 
       # Get the tracking ids 
       tracking_identifier = group.tracking_identifier
       tracking_uid = group.tracking_uid
-
-      # Get the findings and finding_sites 
-      finding_type = [group.finding_type.CodeValue, group.finding_type.CodingSchemeDesignator, group.finding_type.CodeMeaning]
-      finding_sites = []
+      # Get the finding type 
+      finding_type = [group.finding_type.CodeValue, 
+                      group.finding_type.CodingSchemeDesignator, 
+                      group.finding_type.CodeMeaning]
+      # Get the finding sites 
+      finding_sites = [] 
       for finding_site in group.finding_sites:
-        if hasattr(finding_site, 'ConceptCodeSequence') and finding_site.ConceptCodeSequence:
-          finding_sites.append([finding_site.ConceptCodeSequence[0].CodeValue, 
-                                finding_site.ConceptCodeSequence[0].CodingSchemeDesignator,
-                                finding_site.ConceptCodeSequence[0].CodeMeaning])
-
-      # # list of QualitativeEvaluation 
-      # if (len(group.get_qualitative_evaluations())>0): 
-      #   qual_eval = group.get_qualitative_evaluations()[0] 
-      #   num_qual_eval = len(qual_eval)
-      #   qual_eval_names = [] 
-      #   qual_eval_values = [] 
-      #   for n in range(0,num_qual_eval):
-      #     qual_eval_name_CodeValue = qual_eval[n].name.CodeValue 
-      #     qual_eval_name_CodingSchemeDesignator = qual_eval[n].name.CodingSchemeDesignator 
-      #     qual_eval_name_CodeMeaning = qual_eval[n].name.CodeMeaning 
-      #     qual_eval_value_CodeValue = qual_eval[n].value.CodeValue 
-      #     qual_eval_value_CodingSchemeDesignator = qual_eval[n].value.CodingSchemeDesignator 
-      #     qual_eval_value_CodeMeaning = qual_eval[n].value.CodeMeaning 
-      #     qual_eval_name = [qual_eval_name_CodeValue, 
-      #                       qual_eval_name_CodingSchemeDesignator, 
-      #                       qual_eval_name_CodeMeaning]
-      #     qual_eval_value = [qual_eval_value_CodeValue, 
-      #                        qual_eval_value_CodingSchemeDesignator, 
-      #                        qual_eval_value_CodeMeaning]
-      #     qual_eval_names.append(qual_eval_name)
-      #     qual_eval_values.append(qual_eval_value)
-
-      # findings, clinically significant cancer, ggg 
+        finding_sites.append([finding_site.value.CodeValue, 
+                              finding_site.value.CodingSchemeDesignator, 
+                              finding_site.value.CodeMeaning])
+        
+      # Get the point info 
+      referenced_frame_of_reference_uid = group.roi.ReferencedFrameOfReferenceUID
+      extracted_data = group.roi.value[0] 
+        
+      # Get the content items 
       if (len(group)>0): 
-        # group[0] = highdicom.sr.value_types.ContainerContentItem
+        code_items = hd.sr.utils.find_content_items(group[0], 
+                                                    relationship_type=hd.sr.RelationshipTypeValues.CONTAINS, 
+                                                    value_type = hd.sr.ValueTypeValues.CODE)
         content_sequence_names = [] 
         content_sequence_values = [] 
-        for n in range(0,len(group[0])): 
-            ContentSequence = group[0].ContentSequence[n]
-            if ContentSequence.RelationshipType=="CONTAINS":
-              # print('ContentSequence.name: ' + str(ContentSequence.name))
-              content_sequence_name_CodeValue = ContentSequence.name.CodeValue 
-              content_sequence_name_CodingSchemeDesignator = ContentSequence.name.CodingSchemeDesignator 
-              content_sequence_name_CodeMeaning = ContentSequence.name.CodeMeaning
-              # if ContentSequence.name is 111030, DCM, Image Region, we skip, as we will be reading this later in the group. 
-              # if (content_sequence_name_CodeValue=="111030" and \
-              #     content_sequence_name_CodingSchemeDesignator=="DCM"):
-              if (ContentSequence.name == image_region_code):
-                #continue
-                break
-              else:
-                # print('ContentSequence.value: ' + str(ContentSequence.value))
-                content_sequence_value_CodeValue = ContentSequence.value.CodeValue 
-                content_sequence_value_CodingSchemeDesignator = ContentSequence.value.CodingSchemeDesignator 
-                content_sequence_value_CodeMeaning = ContentSequence.value.CodeMeaning 
-                content_sequence_name = [content_sequence_name_CodeValue, 
-                                        content_sequence_name_CodingSchemeDesignator, 
-                                        content_sequence_name_CodeMeaning]
-                content_sequence_value = [content_sequence_value_CodeValue, 
-                                          content_sequence_value_CodingSchemeDesignator, 
-                                          content_sequence_value_CodeMeaning]
-                content_sequence_names.append(content_sequence_name)
-                content_sequence_values.append(content_sequence_value)
-
-      # print('content_sequence_names: ' + str(content_sequence_names))
-      # print('num content_sequence_names: ' + str(len(content_sequence_names)))
-      # print('content_sequence_values: ' + str(content_sequence_values))
-      # print('num content_sequence_values: ' + str(len(content_sequence_values)))
-
-      # Here we check for Image Region 
-      # if (group.reference_type.value=="111030" and \
-      #     group.reference_type.scheme_designator=="DCM"):
-      if (group.reference_type == image_region_code): 
-        roi = group.roi # should exist if Image Region is present
-        graphic_type = roi.GraphicType
-        value_type = roi.value_type
-        if (graphic_type == "POINT" and value_type == hd.sr.ValueTypeValues('SCOORD3D')): 
-          referenced_frame_of_reference_uid = group.roi.ReferencedFrameOfReferenceUID
-          extracted_data = roi.GraphicData 
-
+        for code_item in code_items: 
+          # Skip image region code here, will get in a different way. 
+          if (code_item.name == image_region_code):
+            break
+          else: 
+            content_sequence_names.append([code_item.name.CodeValue,
+                                          code_item.name.CodingSchemeDesignator, 
+                                          code_item.name.CodeMeaning])
+            content_sequence_values.append([code_item.value.CodeValue, 
+                                            code_item.value.CodingSchemeDesignator,
+                                            code_item.value.CodeMeaning])
       # append to poly_infos
       point_infos.append({
                          "TrackingIdentifier": tracking_identifier, 
@@ -916,7 +784,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     return point_infos, tableNode 
   
   def extractLineMetadataToVtkTableNode(self, sr):
-
     """
     Extracts the point metadata from the SR using highdicom, 
     and creates a table node. 
@@ -930,14 +797,15 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # get the referenced SeriesInstanceUID 
     referenced_series_instance_uid = sr.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
 
-    # get image region code 
-    image_region_code = self.getHighdicomCode("Image Region")
-
     # will store the info needed for table too. 
     line_infos = [] 
 
     # First get the planar roi measurement gorups 
-    groups = sr.content.get_planar_roi_measurement_groups()
+    # groups = sr.content.get_planar_roi_measurement_groups()
+    groups = sr.content.get_planar_roi_measurement_groups(
+        reference_type=self.getSRCode("Image Region"),
+        graphic_type=hd.sr.GraphicTypeValues.POLYLINE, 
+      )  
 
     for group in groups: 
 
@@ -949,47 +817,33 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       finding_type = [group.finding_type.CodeValue, group.finding_type.CodingSchemeDesignator, group.finding_type.CodeMeaning]
       finding_sites = []
       for finding_site in group.finding_sites:
-        if hasattr(finding_site, 'ConceptCodeSequence') and finding_site.ConceptCodeSequence:
-          finding_sites.append([finding_site.ConceptCodeSequence[0].CodeValue, 
-                                finding_site.ConceptCodeSequence[0].CodingSchemeDesignator,
-                                finding_site.ConceptCodeSequence[0].CodeMeaning])
-
-      # Here we check for Image Region 
-      # if (group.reference_type.value=="111030" and \
-      #     group.reference_type.scheme_designator=="DCM"):
-      if (group.reference_type == image_region_code):
-
-        roi = group.roi # should exist if Image Region is present      
-        try: 
-          referenced_sop_instance_uid = roi.ContentSequence[0].referenced_sop_instance_uid
-        except: 
-          print('Cannot access referenced SOPInstanceUID')
-
-        if (roi.GraphicType=="POLYLINE"):
-          polyline = roi.GraphicData 
-          # Could be frame, or volume, interpretation of points is different then! 
-          # We have already checked when we load the SR, that we can only handle VOLUME for now.  
-          # extracted_data_type = roi.PixelOriginInterpretation 
-          # get the points 
-          num_points = np.int32(len(polyline)/2)
-          point_line = [] 
-          for n in range(0,num_points): 
-            pointx = polyline[(n*2)] 
-            pointy = polyline[((n*2)+1)]
-            pointz = self.getIPPFromSOP(referenced_sop_instance_uid,
-                                        referenced_series_instance_uid)[2] 
-            point_line.append([-pointx, -pointy, pointz]) # negate for display in Slicer 
-          # append to poly_infos
-          line_infos.append({
-                            "TrackingIdentifier": tracking_identifier, 
-                            "TrackingUID" : tracking_uid,
-                            "SOPInstanceUID" : referenced_sop_instance_uid, 
-                            "FindingType": finding_type, 
-                            "FindingSite": finding_sites,
-                            "polyline": point_line
-                            })
-
-    # create and display tableNode 
+        finding_sites.append([finding_site.value.CodeValue, 
+                              finding_site.value.CodingSchemeDesignator, 
+                              finding_site.value.CodeMeaning])
+      
+      # Get the reference 
+      referenced_sop_instance_uid = group.roi.ContentSequence[0].referenced_sop_instance_uid
+      # Get the polyline 
+      polyline = group.roi.value
+      # get the points 
+      num_points = np.int32(len(polyline))
+      point_line = [] 
+      for n in range(0,num_points): 
+        pointx = polyline[n,0]
+        pointy = polyline[n,1]
+        pointz = self.getIPPFromSOP(referenced_sop_instance_uid,
+                                    referenced_series_instance_uid)[2] 
+        point_line.append([-pointx, -pointy, pointz]) # negate for display in Slicer 
+      # append to poly_infos
+      line_infos.append({
+                        "TrackingIdentifier": tracking_identifier, 
+                        "TrackingUID" : tracking_uid,
+                        "SOPInstanceUID" : referenced_sop_instance_uid, 
+                        "FindingType": finding_type, 
+                        "FindingSite": finding_sites,
+                        "polyline": point_line
+                        })
+      
     tableNode = self.createPolylineTable(line_infos, table_name)
 
     return line_infos, tableNode 
@@ -1173,7 +1027,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # sr = hd.sr.srread(dicomFilePath)
     # FrameOfReferenceUIDs = [] 
 
-    # # Get the ImageRegion3D code 
+    # # Get the ImageRegion code 
     # image_region_code = self.getHighdicomCode("Image Region")
 
     # # First get the planar roi measurement groups 
@@ -1277,7 +1131,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       # add new node 
       lineNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsLineNode", line_text)
       # Set to locked by default
-      lineNode.SetLocked(True)
+      # lineNode.SetLocked(True)
       # self.addSeriesInSubjectHierarchy(loadable, lineNode)
       # get number of points 
       num_points = len(polyline)
@@ -1364,7 +1218,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       print('containsPlanarAnnotations: ' + str(containsPlanarAnnotations))
 
       # use plugin to read the SR 
-      if (containsPlanarAnnotations):
+      if not (containsPlanarAnnotations):
 
         param = {
           "inputSRFileName": srFileName,
@@ -1419,13 +1273,16 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         # print('in load function: num unique loadable.referencedInstanceUIDs:' + str(len(list(set(loadable.referencedInstanceUIDs)))))
 
         # check if contains a point, bbox, polyline 
-        checkIfSRContainsBboxWithVolumeReference = self.checkIfSRContainsBboxWithVolumeReference(sr)
-        checkIfSRContains3DPoint = self.checkIfSRContains3DPoint(sr)
-        checkIfSRContainsPolylineWithVolumeReference = self.checkIfSRContainsPolylineWithVolumeReference(sr)
+        checkIfSRContainsBbox = self.checkIfSRContainsGeometry(sr, geometry_type='bbox')
+        checkIfSRContains3DPoint = self.checkIfSRContainsGeometry(sr, geometry_type='point3D')
+        checkIfSRContainsPolyline = self.checkIfSRContainsGeometry(sr, geometry_type='polyline')
+        # print('checkIfSRContainsBbox: ' + str(checkIfSRContainsBbox))
+        # print('checkIfSRContains3DPoint: ' + str(checkIfSRContains3DPoint))
+        # print("checkIfSRContainsPolyline: " + str(checkIfSRContainsPolyline))
 
         # if bbox 
-        if (checkIfSRContainsBboxWithVolumeReference): 
-          print('SR contains bounding box with volume reference')
+        if (checkIfSRContainsBbox): 
+          print('SR contains bounding box')
           bboxInfo, bboxTableNode = self.extractBboxMetadataToVtkTableNode(sr)
           self.showTable(bboxTableNode)
           self.addSeriesInSubjectHierarchy(loadable, bboxTableNode)
@@ -1440,8 +1297,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
             self.displayPointMarkups(sr, loadable, pointInfo)
 
         # if polyline but not bbox 
-        if (checkIfSRContainsPolylineWithVolumeReference==1 and checkIfSRContainsBboxWithVolumeReference==0):
-            print('SR contains a polyline, with a volume reference, and not a bbox')
+        if (checkIfSRContainsPolyline==1 and checkIfSRContainsBbox==0):
+            print('SR contains a polyline, and not a bbox')
             lineInfo, lineTableNode = self.extractLineMetadataToVtkTableNode(sr)
             self.showTable(lineTableNode)
             self.addSeriesInSubjectHierarchy(loadable, lineTableNode)
