@@ -75,6 +75,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
         loadables.append(loadable)
 
+        print('loadable.name: ' + str(loadable.name))
         print('loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
         # print('num loadable.referencedInstanceUIDs: ' + str(len(loadable.referencedInstanceUIDs)))
         # print('num unique loadable.referencedInstanceUIDs: ' + str(len(list(set(loadable.referencedInstanceUIDs)))))
@@ -1276,9 +1277,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         checkIfSRContainsBbox = self.checkIfSRContainsGeometry(sr, geometry_type='bbox')
         checkIfSRContains3DPoint = self.checkIfSRContainsGeometry(sr, geometry_type='point3D')
         checkIfSRContainsPolyline = self.checkIfSRContainsGeometry(sr, geometry_type='polyline')
-        # print('checkIfSRContainsBbox: ' + str(checkIfSRContainsBbox))
-        # print('checkIfSRContains3DPoint: ' + str(checkIfSRContains3DPoint))
-        # print("checkIfSRContainsPolyline: " + str(checkIfSRContainsPolyline))
+
+        tables = [] 
 
         # if bbox 
         if (checkIfSRContainsBbox): 
@@ -1287,7 +1287,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           self.showTable(bboxTableNode)
           self.addSeriesInSubjectHierarchy(loadable, bboxTableNode)
           self.displayBboxMarkups(sr, loadable, bboxInfo)
-
+          tables.append(bboxTableNode)
+          
         # if point 
         if (checkIfSRContains3DPoint):
             print('SR contains 3D point')
@@ -1295,6 +1296,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
             self.showTable(pointTableNode)
             self.addSeriesInSubjectHierarchy(loadable, pointTableNode)
             self.displayPointMarkups(sr, loadable, pointInfo)
+            tables.append(pointTableNode)
 
         # if polyline but not bbox 
         if (checkIfSRContainsPolyline==1 and checkIfSRContainsBbox==0):
@@ -1303,17 +1305,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
             self.showTable(lineTableNode)
             self.addSeriesInSubjectHierarchy(loadable, lineTableNode)
             self.displayLineMarkups(sr, loadable, lineInfo)
-            # create folder in subject hierarchy
-            # shNode = slicer.modules.subjecthierarchy.logic().GetSubjectHierarchyNode()
-            # linesDirectory = shNode.CreateFolderItem(shNode.GetSceneItemID(), "lines") # later use a better descriptor 
-            # add markups to folder 
-            # Get the Subject Hierarchy item ID for the markup node
-            # markupItemID = shNode.GetItemByDataNode(markupNode)
-            # Set the parent to the folder
-            # shNode.SetItemParent(markupItemID, folderItemID)
-
-
-
+            tables.append(lineTableNode)
 
     return len(tables) > 0
 
