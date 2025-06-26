@@ -51,7 +51,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     loadables = []
 
     for cFile in files:
-      dataset = pydicom.read_file(cFile)
+      dataset = pydicom.dcmread(cFile) # dataset = pydicom.read_file(cFile)
 
       uid = self.getDICOMValue(dataset, "SOPInstanceUID")
       if uid == "":
@@ -75,8 +75,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
         loadables.append(loadable)
 
-        print('loadable.name: ' + str(loadable.name))
-        print('loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
+        # print('loadable.name: ' + str(loadable.name))
+        # print('loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
+
         # print('num loadable.referencedInstanceUIDs: ' + str(len(loadable.referencedInstanceUIDs)))
         # print('num unique loadable.referencedInstanceUIDs: ' + str(len(list(set(loadable.referencedInstanceUIDs)))))
 
@@ -153,7 +154,29 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       highdicom_code = ""
 
     return highdicom_code
+  
+  def getSOPInstanceUIDsForSeries(self, SeriesInstanceUID):
+    db = slicer.dicomDatabase
+    SOPInstanceUIDs = [] 
+    IPPs = [] 
+    fileList = db.filesForSeries(SeriesInstanceUID) 
+    for file in fileList: 
+      SOPInstanceUID = db.fileValue(file, self.getDICOMTagValue("SOPInstanceUID"))
+      SOPInstanceUIDs.append(SOPInstanceUID) 
+      IPP = db.fileValue(file, "0020,0032")
+      IPP = IPP.split("\\")
+      IPPs.append(np.float32(IPP[2])) # z index converted from string to float 
+    # Now we order the SOPInstanceUIDs/IPPs by the IPP 
+    IPPs = np.asarray(IPPs)
+    sort_index = np.argsort(IPPs)
+    IPPs_sorted = [IPPs[i] for i in sort_index] 
+    SOPInstanceUIDs_sorted = [SOPInstanceUIDs[i] for i in sort_index]
+    # print ('In getSOPInstanceUIDsForSeries')
+    # print("IPPs: " + str(IPPs))
+    # print('IPPs_sorted: ' + str(IPPs_sorted))
 
+    return SOPInstanceUIDs_sorted
+  
   def createLoadableAndAddReferences(self, datasets):
 
     loadable = DICOMLoadable()
@@ -170,35 +193,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     segPlugin = slicer.modules.dicomPlugins["DICOMSegmentationPlugin"]()
 
     for dataset in datasets:
-      
-      uid = self.getDICOMValue(dataset, "SOPInstanceUID")
-      loadable.ReferencedSegmentationInstanceUIDs[uid] = []
-      if hasattr(dataset, "CurrentRequestedProcedureEvidenceSequence"):
-        for refSeriesSequence in dataset.CurrentRequestedProcedureEvidenceSequence:
-          for referencedSeriesSequence in refSeriesSequence.ReferencedSeriesSequence:
-            for refSOPSequence in referencedSeriesSequence.ReferencedSOPSequence:
-              if refSOPSequence.ReferencedSOPClassUID == self.UID_SegmentationStorage:
-                logging.debug("Found referenced segmentation")
-                loadable.ReferencedSegmentationInstanceUIDs[uid].append(referencedSeriesSequence.SeriesInstanceUID)
 
-              elif refSOPSequence.ReferencedSOPClassUID == self.UID_RealWorldValueMappingStorage: # handle SUV mapping
-                logging.debug("Found referenced RWVM")
-                loadable.ReferencedRWVMSeriesInstanceUIDs.append(referencedSeriesSequence.SeriesInstanceUID)
-              else:
-                # TODO: those are not used at all
-                logging.debug( "Found other reference")
-                loadable.ReferencedOtherInstanceUIDs.append(refSOPSequence.ReferencedSOPInstanceUID)
-
-      for segSeriesInstanceUID in loadable.ReferencedSegmentationInstanceUIDs[uid]:
-        segLoadables = segPlugin.examine([slicer.dicomDatabase.filesForSeries(segSeriesInstanceUID)])
-        for segLoadable in segLoadables:
-          loadable.referencedInstanceUIDs += segLoadable.referencedInstanceUIDs
-      
-      ### Additions for handling other SRs ### 
-          
-      # We additionally convert the pydicom dataset to a Comprehensive3DSR using highdicom 
-      # Will make it easier to extract certain fields later. 
-      # sr = hd.sr.Comprehensive3DSR.from_dataset(dataset)
+      ### First we convert from dataset to sr ###
       sr_class_map = {
           pydicom.uid.EnhancedSRStorage: hd.sr.EnhancedSR,
           pydicom.uid.ComprehensiveSRStorage: hd.sr.ComprehensiveSR,
@@ -212,121 +208,343 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       if sr_class is not None:
         sr = sr_class.from_dataset(dataset, copy=False)
       else:
-        raise ValueError(f"Unsupported SOP Class UID: {sop_class_uid}")
-                
-      # We check for FrameOfReferenceUID, and add to the list of loadable.referencedInstanceUIDs 
-      # Please refer to David Clunie's paper for more information about searching for the FrameOfReferenceUIDs
-      # http://dx.doi.org/10.13140/RG.2.2.34520.62725 
-      if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []) and (loadable.referencedInstanceUIDs == []): 
+        print("Cannot create SR from dataset.") # Fix the error later 
 
-        print('Check for FrameOfReferenceUID')
-        FrameOfReferenceUIDs = [] 
-        # get the ImageRegion code 
-        image_region_code = self.getSRCode("Image Region")
-        # First get the planar roi measurement groups 
-        # groups = sr.content.get_planar_roi_measurement_groups()
-        groups = sr.content.get_planar_roi_measurement_groups(
-                  graphic_type=hd.sr.GraphicTypeValues3D.POINT,
-                  reference_type=codes.DCM.ImageRegion,
-              )
-        # Then we check if the SR contains a point or not 
-        # Iterate through the groups 
-        for group in groups: 
-          # # Check if there is a reference_type, should be ImageRegion
-          # try: 
-          #   reference_type = group.reference_type
-          # except: 
-          #   print('reference_type does not exist for group')
-          # # If it does equal image_region_code, then check if it's a POINT
-          # if (reference_type == image_region_code):
-          #   try: 
-          #     graphic_type = group.roi.GraphicType
-          #   except: 
-          #     print('GraphicType does not exist for group.roi')
-          #   try:
-          #     value_type = group.roi.value_type 
-          #   except: 
-          #     print('ValueType does not exist for group.roi')
-          #   if (graphic_type == "POINT" and value_type == hd.sr.ValueTypeValues('SCOORD3D')): 
-          #     FrameOfReferenceUIDs.append(group.roi.ReferencedFrameOfReferenceUID)
-          # # unique FrameOfReferenceUIDs 
-          # FrameOfReferenceUIDs = list(set(FrameOfReferenceUIDs))
+      ### First we check if the SR contains planar annotations ###
+      containsPlanarAnnotations = self.containsPlanarAnnotations(sr) 
 
+      ### If it doesn't contain planar annotations, and instead references a seg, we use the original code ### 
+      if not containsPlanarAnnotations: 
+      
+        uid = self.getDICOMValue(dataset, "SOPInstanceUID")
+        loadable.ReferencedSegmentationInstanceUIDs[uid] = []
+        if hasattr(dataset, "CurrentRequestedProcedureEvidenceSequence"):
+          for refSeriesSequence in dataset.CurrentRequestedProcedureEvidenceSequence:
+            for referencedSeriesSequence in refSeriesSequence.ReferencedSeriesSequence:
+              for refSOPSequence in referencedSeriesSequence.ReferencedSOPSequence:
+                if refSOPSequence.ReferencedSOPClassUID == self.UID_SegmentationStorage:
+                  logging.debug("Found referenced segmentation")
+                  loadable.ReferencedSegmentationInstanceUIDs[uid].append(referencedSeriesSequence.SeriesInstanceUID)
 
-          FrameOfReferenceUIDs = group.roi.frame_of_reference_uid
+                elif refSOPSequence.ReferencedSOPClassUID == self.UID_RealWorldValueMappingStorage: # handle SUV mapping
+                  logging.debug("Found referenced RWVM")
+                  loadable.ReferencedRWVMSeriesInstanceUIDs.append(referencedSeriesSequence.SeriesInstanceUID)
+                else:
+                  # TODO: those are not used at all
+                  logging.debug( "Found other reference")
+                  loadable.ReferencedOtherInstanceUIDs.append(refSOPSequence.ReferencedSOPInstanceUID) 
 
+        for segSeriesInstanceUID in loadable.ReferencedSegmentationInstanceUIDs[uid]:
+          segLoadables = segPlugin.examine([slicer.dicomDatabase.filesForSeries(segSeriesInstanceUID)])
+          for segLoadable in segLoadables:
+            loadable.referencedInstanceUIDs += segLoadable.referencedInstanceUIDs
+        
+        if len(loadable.ReferencedSegmentationInstanceUIDs[uid])>1:
+          logging.warning("SR references more than one SEG. This has not been tested!")
+        for segUID in loadable.ReferencedSegmentationInstanceUIDs:
+          loadable.referencedSegInstanceUIDs.append(segUID)
+
+        if len(loadable.ReferencedRWVMSeriesInstanceUIDs)>1:
+          logging.warning("SR references more than one RWVM. This has not been tested!")
+            # not adding RWVM instances to referencedSeriesInstanceUIDs
+      
+      ### Additions for handling planar annotations ### 
+      else: 
+      # if containsPlanarAnnotations: 
+          
+        # We convert the pydicom dataset to a Comprehensive3DSR using highdicom 
+        # Will make it easier to extract certain fields later. 
+        # sr = hd.sr.Comprehensive3DSR.from_dataset(dataset)
+        sr_class_map = {
+            pydicom.uid.EnhancedSRStorage: hd.sr.EnhancedSR,
+            pydicom.uid.ComprehensiveSRStorage: hd.sr.ComprehensiveSR,
+            pydicom.uid.Comprehensive3DSRStorage: hd.sr.Comprehensive3DSR,
+        }
+        # Get the SOP Class UID from the dataset
+        sop_class_uid = dataset.SOPClassUID
+        # Retrieve the correct SR class from the dictionary
+        sr_class = sr_class_map.get(sop_class_uid)
+        # Instantiate the correct SR object
+        if sr_class is not None:
+          sr = sr_class.from_dataset(dataset, copy=False)
+        else:
+          raise ValueError(f"Unsupported SOP Class UID: {sop_class_uid}")
+        
+        #### Then we check if the SR contains a point3d, line, or bbox ### 
+        checkIfSRContainsBbox = self.checkIfSRContainsGeometry(sr, geometry_type='bbox')
+        checkIfSRContains3DPoint = self.checkIfSRContainsGeometry(sr, geometry_type='point3D')
+        checkIfSRContainsPolyline = self.checkIfSRContainsGeometry(sr, geometry_type='polyline')
+
+        ### checkIfSRContains3DPoint ###
+        # We only check for FrameOfReferenceUID for 3Dpoint
+        # We check for FrameOfReferenceUID, and add to the list of loadable.referencedInstanceUIDs 
+        # Please refer to David Clunie's paper for more information about searching for the FrameOfReferenceUIDs
+        # http://dx.doi.org/10.13140/RG.2.2.34520.62725 
+        if checkIfSRContains3DPoint: 
+
+          print('In checkIfSRContains3DPoint - check for FrameOfReferenceUID')     
+          # get the ImageRegion code 
+          image_region_code = self.getSRCode("Image Region")
+          # First get the planar roi measurement groups 
+          # groups = sr.content.get_planar_roi_measurement_groups()
+          groups = sr.content.get_planar_roi_measurement_groups(
+                    graphic_type=hd.sr.GraphicTypeValues3D.POINT,
+                    reference_type=codes.DCM.ImageRegion,
+          )
+
+          # Iterate through the groups, and get unique list of FrameOfReferenceUIDs 
+          FrameOfReferenceUIDs = [] 
+          for group in groups: 
+            FrameOfReferenceUIDs.append(group.roi.frame_of_reference_uid)
+          FrameOfReferenceUIDs = list(set(FrameOfReferenceUIDs))
 
           # Now we get the SeriesInstanceUIDs in the dicom database that have these FrameOfReferenceUIDs 
           # We know that the StudyInstanceUID must be the same, so we only check those patients. 
           StudyInstanceUID = dataset.StudyInstanceUID 
-          # Get the list of series in the database for this study 
+          # Get the list of possible series in the database for this study 
           SeriesInstanceUIDs = slicer.dicomDatabase.seriesForStudy(StudyInstanceUID)
-          # Now get the FrameOfReferenceUIDs for these SeriesInstanceUIDs 
+
+          # Now make sure that the modality of these possible_SeriesInstanceUIDs are not SR or SEG.  
+          # Don't want them included in the list 
           possible_SeriesInstanceUIDs = [] 
-          for SeriesInstanceUID in SeriesInstanceUIDs: 
+          db = slicer.dicomDatabase 
+          for series in SeriesInstanceUIDs: 
+            modality = slicer.dicomDatabase.fileValue(  
+              slicer.dicomDatabase.filesForSeries(series)[0], self.getDICOMTagValue("Modality")
+            )
+            if (modality != "SR") and (modality != "SEG"): 
+              possible_SeriesInstanceUIDs.append(series)
+
+          # Now get the FrameOfReferenceUIDs for these SeriesInstanceUIDs 
+          FrameOfReferenceUIDs_forSeries = [] 
+          for SeriesInstanceUID in possible_SeriesInstanceUIDs: 
             FrameOfReferenceUID_forSeries = slicer.dicomDatabase.fileValue(
                                                       slicer.dicomDatabase.filesForSeries(SeriesInstanceUID)[0], self.getDICOMTagValue("FrameOfReferenceUID")) 
-            # check if this matches any of the FrameOfReferenceUIDs, if so, add to list of possible_SeriesInstanceUIDs  
+            FrameOfReferenceUIDs_forSeries.append(FrameOfReferenceUID_forSeries)
+          
+          # check if this matches any of the FrameOfReferenceUIDs, if so, add to list of possible_SeriesInstanceUIDs  
+          # if FrameOfReferenceUID_forSeries in FrameOfReferenceUIDs: 
+          #   possible_SeriesInstanceUIDs.append(SeriesInstanceUID)
+            
+          # iterate over the list of FrameOfReferenceUIDs_forSeries and see if any are in the actual SR. 
+          keep_SeriesInstanceUIDs = [] 
+          for SeriesInstanceUID,FrameOfReferenceUID_forSeries in zip(possible_SeriesInstanceUIDs,FrameOfReferenceUIDs_forSeries):
             if FrameOfReferenceUID_forSeries in FrameOfReferenceUIDs: 
-              possible_SeriesInstanceUIDs.append(SeriesInstanceUID)
-          # Should already be unique series 
-          possible_SeriesInstanceUIDs = list(set(possible_SeriesInstanceUIDs))
-          # Now get all the instances for these possible_FrameOfReferenceUIDs 
-          if possible_SeriesInstanceUIDs:
-            db = slicer.dicomDatabase
-            SOPInstanceUIDs = [] 
-            for SeriesInstanceUID in possible_SeriesInstanceUIDs: 
-              fileList = db.filesForSeries(SeriesInstanceUID) 
-              for file in fileList: 
-                SOPInstanceUIDs.append(db.fileValue(file, self.getDICOMTagValue("SOPInstanceUID"))) 
-            SOPInstanceUIDs = list(set(SOPInstanceUIDs))
-            # Now add to the loadable.referencedInstanceUIDs 
-            if (SOPInstanceUIDs):
-              loadable.referencedInstanceUIDs += SOPInstanceUIDs 
-        
-      # First, since the point/bbox/line SRs have no SEG associated, and therefore no referencedInstanceUIDs were added, we do a special case 
-      # We add to the loadable.referencedInstanceUIDs list 
-      # This only adds the particular SOPs that the bbox/lines are on. 
-      # if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []):
-      #   loadable.referencedInstanceUIDs += loadable.ReferencedOtherInstanceUIDs
-      # We need to add all of the SOPs for a series 
-      if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []): 
-        # Iterate through the loadable.ReferencedOtherInstanceUIDs, and get the associated SeriesInstanceUIDs 
-        SeriesInstanceUIDs = [] 
-        for SOPInstanceUID in loadable.ReferencedOtherInstanceUIDs: 
-          filePath = slicer.dicomDatabase.fileForInstance(SOPInstanceUID)
-          SeriesInstanceUIDs.append(slicer.dicomDatabase.fileValue(filePath, self.getDICOMTagValue("SeriesInstanceUID"))) 
-        # Then get a unique list of the SeriesInstanceUID, likely is 1
-        SeriesInstanceUIDs = list(set(SeriesInstanceUIDs))
-        # Now for each of these SeriesInstanceUIDs, get the list of SOPInstanceUIDs 
-        if (SeriesInstanceUIDs):
-          db = slicer.dicomDatabase
-          SOPInstanceUIDs = [] 
-          for SeriesInstanceUID in SeriesInstanceUIDs: 
-            fileList = db.filesForSeries(SeriesInstanceUID) 
-            for file in fileList: 
-              SOPInstanceUIDs.append(db.fileValue(file, self.getDICOMTagValue("SOPInstanceUID"))) 
-          SOPInstanceUIDs = list(set(SOPInstanceUIDs))
+              keep_SeriesInstanceUIDs.append(SeriesInstanceUID)
+
+          # Get the unique list of possible series 
+          keep_SeriesInstanceUIDs = list(set(keep_SeriesInstanceUIDs))
+          # print("keep_SeriesInstanceUIDs: " + str(keep_SeriesInstanceUIDs))
+  
+          # Now get all the instances for these possible series 
+          SOPInstanceUIDs = [self.getSOPInstanceUIDsForSeries(series) for series in keep_SeriesInstanceUIDs]
+          SOPInstanceUIDs = [item for sublist in SOPInstanceUIDs for item in sublist]
+          # SOPInstanceUIDs = list(set(SOPInstanceUIDs))
           # Now add to the loadable.referencedInstanceUIDs 
           if (SOPInstanceUIDs):
             loadable.referencedInstanceUIDs += SOPInstanceUIDs 
+            # loadable.ReferencedOtherInstanceUIDs += SOPInstanceUIDs # try adding??
+
+        #### checkIfSRContainsBbox or checkIfSRContainsPolyline ### 
+        # Here we get the referenced SeriesInstanceUID 
+        if (checkIfSRContainsBbox or checkIfSRContainsPolyline): 
+
+          print('In checkIfSRContainsBbox/checkIfSRContainsPolyline - get referenced series')     
+          # Get the referenced SeriesInstanceUID 
+          referenced_series_instance_uid = sr.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
+          # Now we get all of the SOPInstanceUIDs of this series 
+          db = slicer.dicomDatabase
+          fileList = db.filesForSeries(referenced_series_instance_uid)
+          SOPInstanceUIDs = [db.fileValue(file, self.getDICOMTagValue("SOPInstanceUID")) for file in fileList]
+          if (SOPInstanceUIDs):
+            loadable.referencedInstanceUIDs += SOPInstanceUIDs 
+                  
+      # loadable.referencedInstanceUIDs = list(set(loadable.referencedInstanceUIDs))
+      loadable.referencedInstanceUIds = list(loadable.referencedInstanceUIDs) 
+      # print('loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
+      # print('num loadable.referencedInstanceUIDs: ' + str(len(loadable.referencedInstanceUIDs)))
+
+      ### LATER - I need to check if the series actually exists in the DICOM database, if not, error ### 
+
+
+    return loadable
+
+
+
+
+  # def createLoadableAndAddReferences(self, datasets):
+
+  #   loadable = DICOMLoadable()
+  #   loadable.selected = True
+  #   loadable.confidence = 0.95
+
+  #   loadable.referencedSegInstanceUIDs = []
+  #   # store lists of UIDs separately to avoid re-parsing later
+  #   loadable.ReferencedSegmentationInstanceUIDs = {}
+  #   loadable.ReferencedRWVMSeriesInstanceUIDs = []
+  #   loadable.ReferencedOtherInstanceUIDs = []
+  #   loadable.referencedInstanceUIDs = []
+
+  #   segPlugin = slicer.modules.dicomPlugins["DICOMSegmentationPlugin"]()
+
+  #   for dataset in datasets:
+      
+  #     uid = self.getDICOMValue(dataset, "SOPInstanceUID")
+  #     loadable.ReferencedSegmentationInstanceUIDs[uid] = []
+  #     if hasattr(dataset, "CurrentRequestedProcedureEvidenceSequence"):
+  #       for refSeriesSequence in dataset.CurrentRequestedProcedureEvidenceSequence:
+  #         for referencedSeriesSequence in refSeriesSequence.ReferencedSeriesSequence:
+  #           for refSOPSequence in referencedSeriesSequence.ReferencedSOPSequence:
+  #             if refSOPSequence.ReferencedSOPClassUID == self.UID_SegmentationStorage:
+  #               logging.debug("Found referenced segmentation")
+  #               loadable.ReferencedSegmentationInstanceUIDs[uid].append(referencedSeriesSequence.SeriesInstanceUID)
+
+  #             elif refSOPSequence.ReferencedSOPClassUID == self.UID_RealWorldValueMappingStorage: # handle SUV mapping
+  #               logging.debug("Found referenced RWVM")
+  #               loadable.ReferencedRWVMSeriesInstanceUIDs.append(referencedSeriesSequence.SeriesInstanceUID)
+  #             else:
+  #               # TODO: those are not used at all
+  #               logging.debug( "Found other reference")
+  #               loadable.ReferencedOtherInstanceUIDs.append(refSOPSequence.ReferencedSOPInstanceUID)
+
+  #     for segSeriesInstanceUID in loadable.ReferencedSegmentationInstanceUIDs[uid]:
+  #       segLoadables = segPlugin.examine([slicer.dicomDatabase.filesForSeries(segSeriesInstanceUID)])
+  #       for segLoadable in segLoadables:
+  #         loadable.referencedInstanceUIDs += segLoadable.referencedInstanceUIDs
+      
+  #     ### Additions for handling other SRs ### 
+          
+  #     # We additionally convert the pydicom dataset to a Comprehensive3DSR using highdicom 
+  #     # Will make it easier to extract certain fields later. 
+  #     # sr = hd.sr.Comprehensive3DSR.from_dataset(dataset)
+  #     sr_class_map = {
+  #         pydicom.uid.EnhancedSRStorage: hd.sr.EnhancedSR,
+  #         pydicom.uid.ComprehensiveSRStorage: hd.sr.ComprehensiveSR,
+  #         pydicom.uid.Comprehensive3DSRStorage: hd.sr.Comprehensive3DSR,
+  #     }
+  #     # Get the SOP Class UID from the dataset
+  #     sop_class_uid = dataset.SOPClassUID
+  #     # Retrieve the correct SR class from the dictionary
+  #     sr_class = sr_class_map.get(sop_class_uid)
+  #     # Instantiate the correct SR object
+  #     if sr_class is not None:
+  #       sr = sr_class.from_dataset(dataset, copy=False)
+  #     else:
+  #       raise ValueError(f"Unsupported SOP Class UID: {sop_class_uid}")
+                
+  #     # We check for FrameOfReferenceUID, and add to the list of loadable.referencedInstanceUIDs 
+  #     # Please refer to David Clunie's paper for more information about searching for the FrameOfReferenceUIDs
+  #     # http://dx.doi.org/10.13140/RG.2.2.34520.62725 
+  #     if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []) and (loadable.referencedInstanceUIDs == []): 
+
+  #       print('Check for FrameOfReferenceUID')
+  #       FrameOfReferenceUIDs = [] 
+  #       # get the ImageRegion code 
+  #       image_region_code = self.getSRCode("Image Region")
+  #       # First get the planar roi measurement groups 
+  #       # groups = sr.content.get_planar_roi_measurement_groups()
+  #       groups = sr.content.get_planar_roi_measurement_groups(
+  #                 graphic_type=hd.sr.GraphicTypeValues3D.POINT,
+  #                 reference_type=codes.DCM.ImageRegion,
+  #             )
+  #       # Then we check if the SR contains a point or not 
+  #       # Iterate through the groups 
+  #       for group in groups: 
+  #         # # Check if there is a reference_type, should be ImageRegion
+  #         # try: 
+  #         #   reference_type = group.reference_type
+  #         # except: 
+  #         #   print('reference_type does not exist for group')
+  #         # # If it does equal image_region_code, then check if it's a POINT
+  #         # if (reference_type == image_region_code):
+  #         #   try: 
+  #         #     graphic_type = group.roi.GraphicType
+  #         #   except: 
+  #         #     print('GraphicType does not exist for group.roi')
+  #         #   try:
+  #         #     value_type = group.roi.value_type 
+  #         #   except: 
+  #         #     print('ValueType does not exist for group.roi')
+  #         #   if (graphic_type == "POINT" and value_type == hd.sr.ValueTypeValues('SCOORD3D')): 
+  #         #     FrameOfReferenceUIDs.append(group.roi.ReferencedFrameOfReferenceUID)
+  #         # # unique FrameOfReferenceUIDs 
+  #         # FrameOfReferenceUIDs = list(set(FrameOfReferenceUIDs))
+
+
+  #         FrameOfReferenceUIDs = group.roi.frame_of_reference_uid
+
+
+  #         # Now we get the SeriesInstanceUIDs in the dicom database that have these FrameOfReferenceUIDs 
+  #         # We know that the StudyInstanceUID must be the same, so we only check those patients. 
+  #         StudyInstanceUID = dataset.StudyInstanceUID 
+  #         # Get the list of series in the database for this study 
+  #         SeriesInstanceUIDs = slicer.dicomDatabase.seriesForStudy(StudyInstanceUID)
+  #         # Now get the FrameOfReferenceUIDs for these SeriesInstanceUIDs 
+  #         possible_SeriesInstanceUIDs = [] 
+  #         for SeriesInstanceUID in SeriesInstanceUIDs: 
+  #           FrameOfReferenceUID_forSeries = slicer.dicomDatabase.fileValue(
+  #                                                     slicer.dicomDatabase.filesForSeries(SeriesInstanceUID)[0], self.getDICOMTagValue("FrameOfReferenceUID")) 
+  #           # check if this matches any of the FrameOfReferenceUIDs, if so, add to list of possible_SeriesInstanceUIDs  
+  #           if FrameOfReferenceUID_forSeries in FrameOfReferenceUIDs: 
+  #             possible_SeriesInstanceUIDs.append(SeriesInstanceUID)
+  #         # Should already be unique series 
+  #         possible_SeriesInstanceUIDs = list(set(possible_SeriesInstanceUIDs))
+  #         # Now get all the instances for these possible_FrameOfReferenceUIDs 
+  #         if possible_SeriesInstanceUIDs:
+  #           db = slicer.dicomDatabase
+  #           SOPInstanceUIDs = [] 
+  #           for SeriesInstanceUID in possible_SeriesInstanceUIDs: 
+  #             fileList = db.filesForSeries(SeriesInstanceUID) 
+  #             for file in fileList: 
+  #               SOPInstanceUIDs.append(db.fileValue(file, self.getDICOMTagValue("SOPInstanceUID"))) 
+  #           SOPInstanceUIDs = list(set(SOPInstanceUIDs))
+  #           # Now add to the loadable.referencedInstanceUIDs 
+  #           if (SOPInstanceUIDs):
+  #             loadable.referencedInstanceUIDs += SOPInstanceUIDs 
+        
+  #     # First, since the point/bbox/line SRs have no SEG associated, and therefore no referencedInstanceUIDs were added, we do a special case 
+  #     # We add to the loadable.referencedInstanceUIDs list 
+  #     # This only adds the particular SOPs that the bbox/lines are on. 
+  #     # if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []):
+  #     #   loadable.referencedInstanceUIDs += loadable.ReferencedOtherInstanceUIDs
+  #     # We need to add all of the SOPs for a series 
+  #     if (loadable.ReferencedSegmentationInstanceUIDs[uid] == []): 
+  #       # Iterate through the loadable.ReferencedOtherInstanceUIDs, and get the associated SeriesInstanceUIDs 
+  #       SeriesInstanceUIDs = [] 
+  #       for SOPInstanceUID in loadable.ReferencedOtherInstanceUIDs: 
+  #         filePath = slicer.dicomDatabase.fileForInstance(SOPInstanceUID)
+  #         SeriesInstanceUIDs.append(slicer.dicomDatabase.fileValue(filePath, self.getDICOMTagValue("SeriesInstanceUID"))) 
+  #       # Then get a unique list of the SeriesInstanceUID, likely is 1
+  #       SeriesInstanceUIDs = list(set(SeriesInstanceUIDs))
+  #       # Now for each of these SeriesInstanceUIDs, get the list of SOPInstanceUIDs 
+  #       if (SeriesInstanceUIDs):
+  #         db = slicer.dicomDatabase
+  #         SOPInstanceUIDs = [] 
+  #         for SeriesInstanceUID in SeriesInstanceUIDs: 
+  #           fileList = db.filesForSeries(SeriesInstanceUID) 
+  #           for file in fileList: 
+  #             SOPInstanceUIDs.append(db.fileValue(file, self.getDICOMTagValue("SOPInstanceUID"))) 
+  #         SOPInstanceUIDs = list(set(SOPInstanceUIDs))
+  #         # Now add to the loadable.referencedInstanceUIDs 
+  #         if (SOPInstanceUIDs):
+  #           loadable.referencedInstanceUIDs += SOPInstanceUIDs 
           
 
 
                       
 
-    loadable.referencedInstanceUIDs = list(set(loadable.referencedInstanceUIDs))
+  #   loadable.referencedInstanceUIDs = list(set(loadable.referencedInstanceUIDs))
 
-    if len(loadable.ReferencedSegmentationInstanceUIDs[uid])>1:
-      logging.warning("SR references more than one SEG. This has not been tested!")
-    for segUID in loadable.ReferencedSegmentationInstanceUIDs:
-      loadable.referencedSegInstanceUIDs.append(segUID)
+  #   if len(loadable.ReferencedSegmentationInstanceUIDs[uid])>1:
+  #     logging.warning("SR references more than one SEG. This has not been tested!")
+  #   for segUID in loadable.ReferencedSegmentationInstanceUIDs:
+  #     loadable.referencedSegInstanceUIDs.append(segUID)
 
-    if len(loadable.ReferencedRWVMSeriesInstanceUIDs)>1:
-      logging.warning("SR references more than one RWVM. This has not been tested!")
-    # not adding RWVM instances to referencedSeriesInstanceUIDs
+  #   if len(loadable.ReferencedRWVMSeriesInstanceUIDs)>1:
+  #     logging.warning("SR references more than one RWVM. This has not been tested!")
+  #   # not adding RWVM instances to referencedSeriesInstanceUIDs
       
-    return loadable
+  #   return loadable
 
 
 
@@ -335,7 +553,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
   def getDateTime(self, uid):
     filename = slicer.dicomDatabase.fileForInstance(uid)
-    dataset = pydicom.read_file(filename)
+    dataset = pydicom.dcmread(filename) # dataset = pydicom.read_file(filename)
     if hasattr(dataset, 'SeriesDate') and hasattr(dataset, "SeriesTime"):
       date = dataset.SeriesDate
       time = dataset.SeriesTime
@@ -1168,42 +1386,24 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # print('num folderChildren: ' + str(childIDs))
 
     return 
-
+  
   def load(self, loadable):
+    
     logging.debug('DICOM SR TID1500 load()')
-
-    # if there is a RWVM object referenced from SEG, assume it contains the
-    # scaling that needs to be applied to the referenced series. Assign
-    # referencedSeriesUID from the image series, but load using the RWVM plugin
 
     logging.debug("before sorting: %s" % loadable.uids)
     sortedUIDs = self.sortReportsByDateTime(loadable.uids)
     logging.debug("after sorting: %s" % sortedUIDs)
 
+    # if there is a RWVM object referenced from SEG, assume it contains the
+    # scaling that needs to be applied to the referenced series. Assign
+    # referencedSeriesUID from the image series, but load using the RWVM plugin
     segPlugin = slicer.modules.dicomPlugins["DICOMSegmentationPlugin"]()
 
-    tables = []
-
+    ### Iterate over the uids ### 
     for idx, uid in enumerate(sortedUIDs):
 
-      for segSeriesInstanceUID in loadable.ReferencedSegmentationInstanceUIDs[uid]:
-        segLoadables = segPlugin.examine([slicer.dicomDatabase.filesForSeries(segSeriesInstanceUID)])
-        for segLoadable in segLoadables:
-          if hasattr(segLoadable, "referencedSegInstanceUIDs"):
-            segLoadable.referencedSegInstanceUIDs = list(set(segLoadable.referencedSegInstanceUIDs) -
-                                                         set(loadable.referencedInstanceUIDs))
-          segPlugin.load(segLoadable)
-          if hasattr(segLoadable, "referencedSeriesUID") and len(loadable.ReferencedRWVMSeriesInstanceUIDs) > 0:
-            self.determineAndApplyRWVMToReferencedSeries(loadable, segLoadable)
-
-      self.tempDir = os.path.join(slicer.app.temporaryPath, "QIICR", "SR", self.currentDateTime, uid)
-      try:
-        os.makedirs(self.tempDir)
-      except OSError:
-        pass
-
-      outputFile = os.path.join(self.tempDir, uid+".json")
-
+      # Get SR filename 
       srFileName = slicer.dicomDatabase.fileForInstance(uid)
       if srFileName is None:
         logging.debug('Failed to get the filename from the DICOM database for ', uid)
@@ -1211,15 +1411,35 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       
       # Read the SR once
       sr = hd.sr.srread(srFileName)
-      
+        
       # Check if the plugin (tid1500reader) should be used or specialized highdicom code
       # to read the planar annotations 
       # sets the self.containsPlanarAnnotations = 0 or 1. 
       containsPlanarAnnotations = self.containsPlanarAnnotations(sr) 
       print('containsPlanarAnnotations: ' + str(containsPlanarAnnotations))
 
-      # use plugin to read the SR 
-      if not (containsPlanarAnnotations):
+      ### If it does not contain planar annotations ###
+      if not containsPlanarAnnotations: 
+
+        tables = []
+
+        for segSeriesInstanceUID in loadable.ReferencedSegmentationInstanceUIDs[uid]:
+          segLoadables = segPlugin.examine([slicer.dicomDatabase.filesForSeries(segSeriesInstanceUID)])
+          for segLoadable in segLoadables:
+            if hasattr(segLoadable, "referencedSegInstanceUIDs"):
+              segLoadable.referencedSegInstanceUIDs = list(set(segLoadable.referencedSegInstanceUIDs) -
+                                                          set(loadable.referencedInstanceUIDs))
+            segPlugin.load(segLoadable)
+            if hasattr(segLoadable, "referencedSeriesUID") and len(loadable.ReferencedRWVMSeriesInstanceUIDs) > 0:
+              self.determineAndApplyRWVMToReferencedSeries(loadable, segLoadable)
+
+        self.tempDir = os.path.join(slicer.app.temporaryPath, "QIICR", "SR", self.currentDateTime, uid)
+        try:
+          os.makedirs(self.tempDir)
+        except OSError:
+          pass
+
+        outputFile = os.path.join(self.tempDir, uid+".json")
 
         param = {
           "inputSRFileName": srFileName,
@@ -1265,7 +1485,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
         self.cleanup()
 
-      # use highdicom code to read the SR 
+      ### If it does contains planar annotations - use highdicom code to read the SR ###
       else: 
 
         # check here if my loadable contains all the proper referencedInstanceUIDs - or if that only happens in the examineFiles 
@@ -1309,6 +1529,147 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     return len(tables) > 0
 
+  # def load(self, loadable):
+    
+  #   logging.debug('DICOM SR TID1500 load()')
+
+  #   # if there is a RWVM object referenced from SEG, assume it contains the
+  #   # scaling that needs to be applied to the referenced series. Assign
+  #   # referencedSeriesUID from the image series, but load using the RWVM plugin
+
+  #   logging.debug("before sorting: %s" % loadable.uids)
+  #   sortedUIDs = self.sortReportsByDateTime(loadable.uids)
+  #   logging.debug("after sorting: %s" % sortedUIDs)
+
+  #   segPlugin = slicer.modules.dicomPlugins["DICOMSegmentationPlugin"]()
+
+  #   tables = []
+
+  #   for idx, uid in enumerate(sortedUIDs):
+
+  #     for segSeriesInstanceUID in loadable.ReferencedSegmentationInstanceUIDs[uid]:
+  #       segLoadables = segPlugin.examine([slicer.dicomDatabase.filesForSeries(segSeriesInstanceUID)])
+  #       for segLoadable in segLoadables:
+  #         if hasattr(segLoadable, "referencedSegInstanceUIDs"):
+  #           segLoadable.referencedSegInstanceUIDs = list(set(segLoadable.referencedSegInstanceUIDs) -
+  #                                                        set(loadable.referencedInstanceUIDs))
+  #         segPlugin.load(segLoadable)
+  #         if hasattr(segLoadable, "referencedSeriesUID") and len(loadable.ReferencedRWVMSeriesInstanceUIDs) > 0:
+  #           self.determineAndApplyRWVMToReferencedSeries(loadable, segLoadable)
+
+  #     self.tempDir = os.path.join(slicer.app.temporaryPath, "QIICR", "SR", self.currentDateTime, uid)
+  #     try:
+  #       os.makedirs(self.tempDir)
+  #     except OSError:
+  #       pass
+
+  #     outputFile = os.path.join(self.tempDir, uid+".json")
+
+  #     srFileName = slicer.dicomDatabase.fileForInstance(uid)
+  #     if srFileName is None:
+  #       logging.debug('Failed to get the filename from the DICOM database for ', uid)
+  #       return False
+      
+  #     # Read the SR once
+  #     sr = hd.sr.srread(srFileName)
+      
+  #     # Check if the plugin (tid1500reader) should be used or specialized highdicom code
+  #     # to read the planar annotations 
+  #     # sets the self.containsPlanarAnnotations = 0 or 1. 
+  #     containsPlanarAnnotations = self.containsPlanarAnnotations(sr) 
+  #     print('containsPlanarAnnotations: ' + str(containsPlanarAnnotations))
+
+  #     # use plugin to read the SR 
+  #     if not (containsPlanarAnnotations):
+
+  #       param = {
+  #         "inputSRFileName": srFileName,
+  #         "metaDataFileName": outputFile,
+  #         }
+
+  #       try:
+  #         tid1500reader = slicer.modules.tid1500reader
+  #       except AttributeError as exc:
+  #         logging.debug('Unable to find CLI module tid1500reader, unable to load SR TID1500 object: %s ' % str(exc))
+  #         self.cleanup()
+  #         return False
+
+  #       cliNode = slicer.cli.run(tid1500reader, None, param, wait_for_completion=True)
+  #       if cliNode.GetStatusString() != 'Completed':
+  #         logging.debug('tid1500reader did not complete successfully, unable to load DICOM SR TID1500')
+  #         self.cleanup()
+  #         return False
+
+  #       table = self.metadata2vtkTableNode(outputFile)
+  #       if table:
+  #         self.addSeriesInSubjectHierarchy(loadable, table)
+  #         with open(outputFile, 'r') as srMetadataFile:
+  #           srMetadataJSON = json.loads(srMetadataFile.read())
+  #           table.SetName(srMetadataJSON["SeriesDescription"])
+
+  #         # TODO: think about the following...
+  #         if len(slicer.util.getNodesByClass('vtkMRMLSegmentationNode')) > 0:
+  #           segmentationNode = slicer.util.getNodesByClass('vtkMRMLSegmentationNode')[-1]
+  #           segmentationNodeID = segmentationNode.GetID()
+  #           table.SetAttribute("ReferencedSegmentationNodeID", segmentationNodeID)
+
+  #           # TODO: think about a better solution for finding related reports
+  #           if idx-1 > -1:
+  #             table.SetAttribute("PriorReportUID", sortedUIDs[idx-1])
+  #             tables[idx-1].SetAttribute("FollowUpReportUID", uid)
+  #           table.SetAttribute("SOPInstanceUID", uid)
+  #           self.assignTrackingUniqueIdentifier(outputFile, segmentationNode)
+
+  #       tables.append(table)
+
+  #       self.loadAdditionalMeasurements(uid, loadable)
+
+  #       self.cleanup()
+
+  #     # use highdicom code to read the SR 
+  #     else: 
+
+  #       # check here if my loadable contains all the proper referencedInstanceUIDs - or if that only happens in the examineFiles 
+  #       # print('in load function: loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
+  #       # print('in load function: num loadable.referencedInstanceUIDs:' + str(len(loadable.referencedInstanceUIDs)))
+  #       # print('in load function: num unique loadable.referencedInstanceUIDs:' + str(len(list(set(loadable.referencedInstanceUIDs)))))
+
+  #       # check if contains a point, bbox, polyline 
+  #       checkIfSRContainsBbox = self.checkIfSRContainsGeometry(sr, geometry_type='bbox')
+  #       checkIfSRContains3DPoint = self.checkIfSRContainsGeometry(sr, geometry_type='point3D')
+  #       checkIfSRContainsPolyline = self.checkIfSRContainsGeometry(sr, geometry_type='polyline')
+
+  #       tables = [] 
+
+  #       # if bbox 
+  #       if (checkIfSRContainsBbox): 
+  #         print('SR contains bounding box')
+  #         bboxInfo, bboxTableNode = self.extractBboxMetadataToVtkTableNode(sr)
+  #         self.showTable(bboxTableNode)
+  #         self.addSeriesInSubjectHierarchy(loadable, bboxTableNode)
+  #         self.displayBboxMarkups(sr, loadable, bboxInfo)
+  #         tables.append(bboxTableNode)
+          
+  #       # if point 
+  #       if (checkIfSRContains3DPoint):
+  #           print('SR contains 3D point')
+  #           pointInfo, pointTableNode = self.extractPointMetadataToVtkTableNode(sr)
+  #           self.showTable(pointTableNode)
+  #           self.addSeriesInSubjectHierarchy(loadable, pointTableNode)
+  #           self.displayPointMarkups(sr, loadable, pointInfo)
+  #           tables.append(pointTableNode)
+
+  #       # if polyline but not bbox 
+  #       if (checkIfSRContainsPolyline==1 and checkIfSRContainsBbox==0):
+  #           print('SR contains a polyline, and not a bbox')
+  #           lineInfo, lineTableNode = self.extractLineMetadataToVtkTableNode(sr)
+  #           self.showTable(lineTableNode)
+  #           self.addSeriesInSubjectHierarchy(loadable, lineTableNode)
+  #           self.displayLineMarkups(sr, loadable, lineInfo)
+  #           tables.append(lineTableNode)
+
+  #   return len(tables) > 0
+
   def getSegmentIDs(self, segmentationNode):
     segmentIDs = vtk.vtkStringArray()
     segmentation = segmentationNode.GetSegmentation()
@@ -1340,7 +1701,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       rwvmPlugin = slicer.modules.dicomPlugins["DICOMRWVMPlugin"]()
       rwvmFile = rwvmFiles[0]
       logging.debug("Reading RWVM from " + rwvmFile)
-      rwvmDataset = pydicom.read_file(rwvmFile)
+      rwvmDataset = pydicom.dcmread(rwvmFile) # rwvmDataset = pydicom.read_file(rwvmFile)
       if hasattr(rwvmDataset, "ReferencedSeriesSequence"):
         if hasattr(rwvmDataset.ReferencedSeriesSequence[0], "SeriesInstanceUID"):
           if rwvmDataset.ReferencedSeriesSequence[0].SeriesInstanceUID == segLoadable.referencedSeriesUID:
@@ -1448,7 +1809,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     """
 
     srFilePath = slicer.dicomDatabase.fileForInstance(srUID)
-    sr = pydicom.read_file(srFilePath)
+    sr = pydicom.dcmread(srFilePath) # sr = pydicom.read_file(srFilePath)
 
     if not self.isConcept(sr, "imagingMeasurementReport"):
       return sr
@@ -1504,7 +1865,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       if not referenceFilePath:
         raise Exception(f"Referenced image is not found in the database (referencedSOPInstanceUID={measurement['referencedSOPInstanceUID']}). Polyline point positions cannot be determined in 3D.")
 
-      reference = pydicom.read_file(referenceFilePath)
+      reference = pydicom.dcmread(referenceFilePath) # reference = pydicom.read_file(referenceFilePath)
       origin = numpy.array(reference.ImagePositionPatient)
       alongColumnVector = numpy.array(reference.ImageOrientationPatient[:3])
       alongRowVector = numpy.array(reference.ImageOrientationPatient[3:])
@@ -1527,7 +1888,7 @@ class DICOMLongitudinalTID1500PluginClass(DICOMTID1500PluginClass):
     loadables = []
 
     for cFile in files:
-      dataset = pydicom.read_file(cFile)
+      dataset = pydicom.dcmread(cFile) # dataset = pydicom.read_file(cFile)
 
       uid = self.getDICOMValue(dataset, "SOPInstanceUID")
       if uid == "":
