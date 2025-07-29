@@ -8,7 +8,7 @@ from collections import Counter
 import numpy
 import numpy as np 
 import random
-import pydicom
+# import pydicom
 from pydicom.sr.codedict import codes
 
 import slicer
@@ -16,11 +16,17 @@ from DICOMLib import DICOMLoadable
 from base.DICOMPluginBase import DICOMPluginBase
 from SlicerDevelopmentToolboxUtils.mixins import ModuleLogicMixin
 
+slicer.util.pip_install("pydicom==2.4.4")
+import pydicom 
+slicer.util.pip_install("highdicom==0.22.0")
+
 try:
     import highdicom as hd
 except ModuleNotFoundError:
+    #slicer.util.pip_install("highdicom==0.24.0")
     slicer.util.pip_install("highdicom")
     import highdicom as hd 
+print('highdicom version: ' + str(hd.__version__))
 
 
 class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
@@ -74,12 +80,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           loadable.name = refName + " " + seriesDescription + " - SR TID1500"
 
         loadables.append(loadable)
-
-        # print('loadable.name: ' + str(loadable.name))
-        # print('loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
-
-        # print('num loadable.referencedInstanceUIDs: ' + str(len(loadable.referencedInstanceUIDs)))
-        # print('num unique loadable.referencedInstanceUIDs: ' + str(len(list(set(loadable.referencedInstanceUIDs)))))
 
         logging.debug('DICOM SR TID1500 modality found')
       
@@ -171,9 +171,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     sort_index = np.argsort(IPPs)
     IPPs_sorted = [IPPs[i] for i in sort_index] 
     SOPInstanceUIDs_sorted = [SOPInstanceUIDs[i] for i in sort_index]
-    # print ('In getSOPInstanceUIDsForSeries')
-    # print("IPPs: " + str(IPPs))
-    # print('IPPs_sorted: ' + str(IPPs_sorted))
 
     return SOPInstanceUIDs_sorted
   
@@ -315,35 +312,52 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
             if (modality != "SR") and (modality != "SEG"): 
               possible_SeriesInstanceUIDs.append(series)
 
-          # Now get the FrameOfReferenceUIDs for these SeriesInstanceUIDs 
-          FrameOfReferenceUIDs_forSeries = [] 
-          for SeriesInstanceUID in possible_SeriesInstanceUIDs: 
-            FrameOfReferenceUID_forSeries = slicer.dicomDatabase.fileValue(
-                                                      slicer.dicomDatabase.filesForSeries(SeriesInstanceUID)[0], self.getDICOMTagValue("FrameOfReferenceUID")) 
-            FrameOfReferenceUIDs_forSeries.append(FrameOfReferenceUID_forSeries)
-          
-          # check if this matches any of the FrameOfReferenceUIDs, if so, add to list of possible_SeriesInstanceUIDs  
-          # if FrameOfReferenceUID_forSeries in FrameOfReferenceUIDs: 
-          #   possible_SeriesInstanceUIDs.append(SeriesInstanceUID)
-            
-          # iterate over the list of FrameOfReferenceUIDs_forSeries and see if any are in the actual SR. 
-          keep_SeriesInstanceUIDs = [] 
-          for SeriesInstanceUID,FrameOfReferenceUID_forSeries in zip(possible_SeriesInstanceUIDs,FrameOfReferenceUIDs_forSeries):
-            if FrameOfReferenceUID_forSeries in FrameOfReferenceUIDs: 
-              keep_SeriesInstanceUIDs.append(SeriesInstanceUID)
+          # Now, we don't need to check if possible_SeriesInstanceUIDs are actually in the DICOM database
+          # We know they are, because we retrieved the list of series using slicer.dicomDatabase.seriesForStudy(StudyInstanceUID)
+          # However, we do need to make sure that possible_SeriesInstanceUIDs is not empty. 
+          # If empty, then display a popup 
+          if not possible_SeriesInstanceUIDs: 
+            logging.error("ERROR: no referenced series found in the DICOM database, cannot load any associated image data")
+            slicer.util.errorDisplay("No referenced series found in the DICOM database, cannot load any associated image data")
 
-          # Get the unique list of possible series 
-          keep_SeriesInstanceUIDs = list(set(keep_SeriesInstanceUIDs))
-          # print("keep_SeriesInstanceUIDs: " + str(keep_SeriesInstanceUIDs))
-  
-          # Now get all the instances for these possible series 
-          SOPInstanceUIDs = [self.getSOPInstanceUIDsForSeries(series) for series in keep_SeriesInstanceUIDs]
-          SOPInstanceUIDs = [item for sublist in SOPInstanceUIDs for item in sublist]
-          # SOPInstanceUIDs = list(set(SOPInstanceUIDs))
-          # Now add to the loadable.referencedInstanceUIDs 
-          if (SOPInstanceUIDs):
-            loadable.referencedInstanceUIDs += SOPInstanceUIDs 
-            # loadable.ReferencedOtherInstanceUIDs += SOPInstanceUIDs # try adding??
+          else: 
+        
+            # Now get the FrameOfReferenceUIDs for these SeriesInstanceUIDs 
+            FrameOfReferenceUIDs_forSeries = [] 
+            for SeriesInstanceUID in possible_SeriesInstanceUIDs: 
+              FrameOfReferenceUID_forSeries = slicer.dicomDatabase.fileValue(
+                                                        slicer.dicomDatabase.filesForSeries(SeriesInstanceUID)[0], self.getDICOMTagValue("FrameOfReferenceUID")) 
+              FrameOfReferenceUIDs_forSeries.append(FrameOfReferenceUID_forSeries)
+            
+            # check if this matches any of the FrameOfReferenceUIDs, if so, add to list of possible_SeriesInstanceUIDs  
+            # if FrameOfReferenceUID_forSeries in FrameOfReferenceUIDs: 
+            #   possible_SeriesInstanceUIDs.append(SeriesInstanceUID)
+              
+            # iterate over the list of FrameOfReferenceUIDs_forSeries and see if any are in the actual SR. 
+            keep_SeriesInstanceUIDs = [] 
+            for SeriesInstanceUID,FrameOfReferenceUID_forSeries in zip(possible_SeriesInstanceUIDs,FrameOfReferenceUIDs_forSeries):
+              if FrameOfReferenceUID_forSeries in FrameOfReferenceUIDs: 
+                keep_SeriesInstanceUIDs.append(SeriesInstanceUID)
+
+            # Get the unique list of possible series 
+            keep_SeriesInstanceUIDs = list(set(keep_SeriesInstanceUIDs))
+            # print("keep_SeriesInstanceUIDs: " + str(keep_SeriesInstanceUIDs))
+    
+            # Now get all the instances for these possible series 
+            # SOPInstanceUIDs = [self.getSOPInstanceUIDsForSeries(series) for series in keep_SeriesInstanceUIDs]
+            # SOPInstanceUIDs = [item for sublist in SOPInstanceUIDs for item in sublist]
+            # # SOPInstanceUIDs = list(set(SOPInstanceUIDs))
+            # # Now add to the loadable.referencedInstanceUIDs 
+            # if (SOPInstanceUIDs):
+            #   loadable.referencedInstanceUIDs += SOPInstanceUIDs 
+
+            SOPInstanceUIDs = [self.getSOPInstanceUIDsForSeries(series) for series in keep_SeriesInstanceUIDs]
+            SOPInstanceUIDs = [item for sublist in SOPInstanceUIDs for item in sublist]
+            # SOPInstanceUIDs = list(set(SOPInstanceUIDs))
+            # Now add to the loadable.referencedInstanceUIDs 
+            if (SOPInstanceUIDs):
+              loadable.referencedInstanceUIDs += SOPInstanceUIDs 
+
 
         #### checkIfSRContainsBbox or checkIfSRContainsPolyline ### 
         # Here we get the referenced SeriesInstanceUID 
@@ -355,16 +369,17 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           # Now we get all of the SOPInstanceUIDs of this series 
           db = slicer.dicomDatabase
           fileList = db.filesForSeries(referenced_series_instance_uid)
-          SOPInstanceUIDs = [db.fileValue(file, self.getDICOMTagValue("SOPInstanceUID")) for file in fileList]
-          if (SOPInstanceUIDs):
-            loadable.referencedInstanceUIDs += SOPInstanceUIDs 
+          if not fileList: 
+            logging.error("ERROR: no referenced series found in the DICOM database, cannot load any associated image data")
+            slicer.util.errorDisplay("No referenced series found in the DICOM database, cannot load any associated image data")
+          else: 
+            SOPInstanceUIDs = [db.fileValue(file, self.getDICOMTagValue("SOPInstanceUID")) for file in fileList]
+            if (SOPInstanceUIDs):
+              loadable.referencedInstanceUIDs += SOPInstanceUIDs 
                   
-      # loadable.referencedInstanceUIDs = list(set(loadable.referencedInstanceUIDs))
-      loadable.referencedInstanceUIds = list(loadable.referencedInstanceUIDs) 
-      # print('loadable.referencedInstanceUIDs: ' + str(loadable.referencedInstanceUIDs))
-      # print('num loadable.referencedInstanceUIDs: ' + str(len(loadable.referencedInstanceUIDs)))
-
-      ### LATER - I need to check if the series actually exists in the DICOM database, if not, error ### 
+      if loadable.referencedInstanceUIDs: 
+        # loadable.referencedInstanceUIDs = list(set(loadable.referencedInstanceUIDs))
+        loadable.referencedInstanceUIDs = list(loadable.referencedInstanceUIDs) 
 
 
     return loadable
