@@ -246,8 +246,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
             # not adding RWVM instances to referencedSeriesInstanceUIDs
       
       ### Additions for handling planar annotations ### 
-      else: 
-      # if containsPlanarAnnotations: 
+      else:
           
         # We convert the pydicom dataset to a Comprehensive3DSR using highdicom 
         # Will make it easier to extract certain fields later. 
@@ -279,7 +278,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         # http://dx.doi.org/10.13140/RG.2.2.34520.62725 
         if checkIfSRContains3DPoint: 
 
-          print('In checkIfSRContains3DPoint - check for FrameOfReferenceUID')     
+          # print('In checkIfSRContains3DPoint - check for FrameOfReferenceUID')     
           # get the ImageRegion code 
           image_region_code = self.getSRCode("Image Region")
           # First get the planar roi measurement groups 
@@ -348,7 +347,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         # Here we get the referenced SeriesInstanceUID 
         if (checkIfSRContainsBbox or checkIfSRContainsPolyline): 
 
-          print('In checkIfSRContainsBbox/checkIfSRContainsPolyline - get referenced series')     
+          # print('In checkIfSRContainsBbox/checkIfSRContainsPolyline - get referenced series')     
           # Get the referenced SeriesInstanceUID 
           referenced_series_instance_uid = sr.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
           # Now we get all of the SOPInstanceUIDs of this series 
@@ -397,24 +396,45 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     """
 
     # default to use the plugin 
-    containsPlanarAnnotations = 0 
+    containsPlanarAnnotations = False
 
     # get the image region code 
     image_region_code = self.getSRCode("Image Region")
 
     planar_roi_measurement_groups = sr.content.get_planar_roi_measurement_groups()
-    num_planar_roi_measurement_groups = len(planar_roi_measurement_groups)
-    if (num_planar_roi_measurement_groups > 0): 
-      for planar_roi_measurement_group in planar_roi_measurement_groups: 
-        # Here we check if it is an Image Region 
-        if (planar_roi_measurement_group.reference_type == image_region_code):
-          if (planar_roi_measurement_group.roi.value_type == hd.sr.ValueTypeValues('SCOORD') or 
-              planar_roi_measurement_group.roi.value_type == hd.sr.ValueTypeValues('SCOORD3D')):
-            containsPlanarAnnotations = 1
-    else:
-      containsPlanarAnnotations = 0 
+    for planar_roi_measurement_group in planar_roi_measurement_groups: 
+      # Here we check if it is an Image Region 
+      if (planar_roi_measurement_group.reference_type == image_region_code):
+          containsPlanarAnnotations = True
 
     return containsPlanarAnnotations
+  
+  # def containsPlanarAnnotations(self, sr):
+  #   """ 
+  #   Checks if the original plugin should be used (tid1500reader) to read the SR, or if specialized 
+  #   highdicom code should be utilized for reading planar annotations, in the case of point,
+  #   bounding box, etc. 
+  #   """
+
+  #   # default to use the plugin 
+  #   containsPlanarAnnotations = False
+
+  #   # get the image region code 
+  #   image_region_code = self.getSRCode("Image Region")
+
+  #   planar_roi_measurement_groups = sr.content.get_planar_roi_measurement_groups()
+  #   num_planar_roi_measurement_groups = len(planar_roi_measurement_groups)
+  #   if (num_planar_roi_measurement_groups > 0): 
+  #     for planar_roi_measurement_group in planar_roi_measurement_groups: 
+  #       # Here we check if it is an Image Region 
+  #       if (planar_roi_measurement_group.reference_type == image_region_code):
+  #         if (planar_roi_measurement_group.roi.value_type == hd.sr.ValueTypeValues('SCOORD') or 
+  #             planar_roi_measurement_group.roi.value_type == hd.sr.ValueTypeValues('SCOORD3D')):
+  #           containsPlanarAnnotations = True
+  #   else:
+  #     containsPlanarAnnotations = False 
+
+  #   return containsPlanarAnnotations
   
   def checkIfSRContainsGeometry(self, sr, geometry_type='bbox'):
     """ 
@@ -736,7 +756,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # will store the info needed for table too. 
     point_infos = [] 
 
-    # First get the planar roi measurement gorups 
+    # First get the planar roi measurement groups 
     groups = sr.content.get_planar_roi_measurement_groups(graphic_type=hd.sr.GraphicTypeValues3D.POINT,reference_type=codes.DCM.ImageRegion)
   
     # Iterate through each group 
@@ -761,23 +781,23 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       extracted_data = group.roi.value[0] 
         
       # Get the content items 
-      if (len(group)>0): 
-        code_items = hd.sr.utils.find_content_items(group[0], 
-                                                    relationship_type=hd.sr.RelationshipTypeValues.CONTAINS, 
-                                                    value_type = hd.sr.ValueTypeValues.CODE)
-        content_sequence_names = [] 
-        content_sequence_values = [] 
-        for code_item in code_items: 
-          # Skip image region code here, will get in a different way. 
-          if (code_item.name == image_region_code):
-            break
-          else: 
-            content_sequence_names.append([code_item.name.CodeValue,
-                                          code_item.name.CodingSchemeDesignator, 
-                                          code_item.name.CodeMeaning])
-            content_sequence_values.append([code_item.value.CodeValue, 
-                                            code_item.value.CodingSchemeDesignator,
-                                            code_item.value.CodeMeaning])
+      # if (len(group)>0):
+      code_items = hd.sr.utils.find_content_items(group[0], 
+                                                  relationship_type=hd.sr.RelationshipTypeValues.CONTAINS, 
+                                                  value_type = hd.sr.ValueTypeValues.CODE)
+      content_sequence_names = [] 
+      content_sequence_values = [] 
+      for code_item in code_items: 
+        # Skip image region code here, will get in a different way. 
+        if (code_item.name == image_region_code):
+          break
+        else: 
+          content_sequence_names.append([code_item.name.CodeValue,
+                                        code_item.name.CodingSchemeDesignator, 
+                                        code_item.name.CodeMeaning])
+          content_sequence_values.append([code_item.value.CodeValue, 
+                                          code_item.value.CodingSchemeDesignator,
+                                          code_item.value.CodeMeaning])
       # append to poly_infos
       point_infos.append({
                          "TrackingIdentifier": tracking_identifier, 
@@ -876,8 +896,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     """
     # Create ROI node
     roi_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsROINode", bbox_name)
-    # Set it to be locked by default
-    roi_node.SetLocked(True)
+    # Do not lock the node
+    roi_node.SetLocked(False)
     
     # Set the size (width, height, thickness)
     size = [width, height, thickness]
@@ -972,11 +992,14 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     markupsNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", point_text)
     markupsNode.CreateDefaultDisplayNodes()
-    markupsNode.SetLocked(True)
+    # if markupsNode.SetLocked(True) - cannot move, edit, or delete points, but also cannot jump between control points. 
+    # if markupsNode.SetLocked(False) - can move, edit, delete and jump between control points. 
+    markupsNode.SetLocked(False) 
     markupsNode.AddControlPoint([point_x, point_y, point_z])
     markupsNode.SetName(point_text)
     markupsNode.SetNthControlPointLabel(point_index, point_text)
 
+    # Make sure control points are locked and cannot be moved 
     markupsNode.GetDisplayNode().SetHandlesInteractive(False)
     for controlPointIndex in range(markupsNode.GetNumberOfControlPoints()):
       markupsNode.SetNthControlPointLocked(controlPointIndex, True)
@@ -1050,8 +1073,8 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       polyline = p['polyline']
       # add new node 
       lineNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsLineNode", line_text)
-      # Set to locked by default
-      lineNode.SetLocked(True)
+      # Do not lock node
+      lineNode.SetLocked(False)
       # get number of points 
       num_points = len(polyline)
       # add each as a control point 
@@ -1109,7 +1132,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         
       # Check if the plugin (tid1500reader) should be used or specialized highdicom code
       # to read the planar annotations 
-      # sets the self.containsPlanarAnnotations = 0 or 1. 
+      # sets the self.containsPlanarAnnotations = True or False 
       containsPlanarAnnotations = self.containsPlanarAnnotations(sr) 
       print('containsPlanarAnnotations: ' + str(containsPlanarAnnotations))
 
