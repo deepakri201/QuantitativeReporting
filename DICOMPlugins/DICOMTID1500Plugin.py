@@ -415,33 +415,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     return containsPlanarAnnotations
   
-  # def containsPlanarAnnotations(self, sr):
-  #   """ 
-  #   Checks if the original plugin should be used (tid1500reader) to read the SR, or if specialized 
-  #   highdicom code should be utilized for reading planar annotations, in the case of point,
-  #   bounding box, etc. 
-  #   """
-
-  #   # default to use the plugin 
-  #   containsPlanarAnnotations = False
-
-  #   # get the image region code 
-  #   image_region_code = self.getSRCode("Image Region")
-
-  #   planar_roi_measurement_groups = sr.content.get_planar_roi_measurement_groups()
-  #   num_planar_roi_measurement_groups = len(planar_roi_measurement_groups)
-  #   if (num_planar_roi_measurement_groups > 0): 
-  #     for planar_roi_measurement_group in planar_roi_measurement_groups: 
-  #       # Here we check if it is an Image Region 
-  #       if (planar_roi_measurement_group.reference_type == image_region_code):
-  #         if (planar_roi_measurement_group.roi.value_type == hd.sr.ValueTypeValues('SCOORD') or 
-  #             planar_roi_measurement_group.roi.value_type == hd.sr.ValueTypeValues('SCOORD3D')):
-  #           containsPlanarAnnotations = True
-  #   else:
-  #     containsPlanarAnnotations = False 
-
-  #   return containsPlanarAnnotations
-  
   def checkIfSRContainsGeometry(self, sr, geometry_type='bbox'):
     """ 
     Checks if the SR contains a bbox, polyline, or point3D
@@ -449,7 +422,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     # If SR contains a bounding box 
     if (geometry_type == "bbox2D"):
-      # for group in sr.content.get_planar_roi_measurement_groups():
       for group in sr.content.get_planar_roi_measurement_groups(reference_type=codes.DCM.ImageRegion, graphic_type=hd.sr.GraphicTypeValues.POLYLINE):
         for eval in group.get_qualitative_evaluations(
               name=self.getSRCode("Geometric purpose of region"),
@@ -538,12 +510,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     col.SetName("FindingSite")
     col = tableNode.AddColumn()
     col.SetName("Bounding box points")
-    # col = tableNode.AddColumn()
-    # col.SetName("width")
-    # col = tableNode.AddColumn()
-    # col.SetName("height")
-    # col = tableNode.AddColumn()
-    # col.SetName("center_RAS")
 
     # Order by IPP2 
     poly_infos = sorted(poly_infos, key=lambda x: x['center_z'])
@@ -567,12 +533,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       tableNode.SetCellText(rowIndex, 1, finding_type[2])
       tableNode.SetCellText(rowIndex, 2, finding_site[2])
       # add bbox points 
-      tableNode.SetCellText(rowIndex, 3, polyline_str) 
-      # # add width, height and center in RAS 
-      # tableNode.SetCellText(rowIndex, 4, str(width))
-      # tableNode.SetCellText(rowIndex, 5, str(height))
-      # tableNode.SetCellText(rowIndex, 6, f"({', '.join(center)})")
-
+      tableNode.SetCellText(rowIndex, 3, polyline_str)
 
     return tableNode 
   
@@ -740,9 +701,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
                          "polyline": bbox, # using roi.GraphicData: [[bbox[0],bbox[1]], [bbox[2],bbox[3]], [bbox[4],bbox[5]], [bbox[6],bbox[7]]], 
                          "width": width, 
                          "height": height,
-                         # "center_x": -center_x, # for display in Slicer, negate this. 
-                         # "center_y": -center_y,  # for display in Slicer, negate this. 
-                         # "center_z": center_z
                          "center_x": center_x,
                          "center_y": center_y, 
                          "center_z": center_z
@@ -878,7 +836,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
         pointy = polyline[n,1] # pixel coord space
         pointz = self.getIPPFromSOP(referenced_sop_instance_uid,
                                     referenced_series_instance_uid)[2] # mm space 
-        # point_line.append([-pointx, -pointy, pointz]) # negate for display in Slicer 
         point_line.append([pointx, pointy, pointz])
       # append to poly_infos
       line_infos.append({
@@ -994,10 +951,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       tracking_identifier = p['TrackingIdentifier']
       width = p['width'] # in pixel coord
       height = p['height'] # in pixel coord
-      # center_x = p['center_x'] # already negated 
-      # center_y = p['center_y'] # already negated 
-      # center_z = p['center_z']
-      # center_ras = np.asarray([center_x, center_y, center_z])
       center_x = p['center_x'] # in pixel coord
       center_y = p['center_y'] # in pixel coord
       center_z = p['center_z'] # in mm 
@@ -1019,7 +972,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       # Set the parent to the folder
       shNode.SetItemParent(markupItemID, bboxFolderID)
       if (i==0):
-        # slicer.modules.markups.logic().JumpSlicesToLocation(center_x, center_y, center_z, True)
         slicer.modules.markups.logic().JumpSlicesToLocation(center_x_mm, center_y_mm, center_z, True)
 
     return 
@@ -1115,8 +1067,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     pixel_spacing = db.fileValue(fileList[0], self.getDICOMTagValue("PixelSpacing"))
     pixel_spacing_x = np.float32(pixel_spacing.split("\\")[0])
     pixel_spacing_y = np.float32(pixel_spacing.split("\\")[1])
-    # num_rows = np.float32(db.fileValue(fileList[0], self.getDICOMTagValue("Rows")))
-    # num_columns = np.float32(db.fileValue(fileList[0], self.getDICOMTagValue("Columns")))
 
     # Create all the line nodes 
     for i,p in enumerate(line_infos):
@@ -1130,8 +1080,6 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       num_points = len(polyline)
       # add each as a control point 
       for n in range(0,num_points): 
-        # point_x = polyline[n][0] # already negated 
-        # point_y = polyline[n][1] # already negated 
         point_x = polyline[n][0] # pixel coord space 
         point_y = polyline[n][1] # pixel coord space
         # convert pixel coordinates to mm 
