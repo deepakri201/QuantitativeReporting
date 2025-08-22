@@ -127,6 +127,12 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       tag_numeric = "0008,0060"
     elif tag_name == "FrameOfReferenceUID": 
       tag_numeric = "0020,0052"
+    elif tag_name == "PixelSpacing":
+      tag_numeric = "0028,0030"
+    elif tag_name == "Rows":
+      tag_numeric = "0028,0010"
+    elif tag_name == "Columns": 
+      tag_numeric = "0028,0011"
     else:
       tag_numeric = "" 
     
@@ -267,9 +273,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
           raise ValueError(f"Unsupported SOP Class UID: {sop_class_uid}")
         
         #### Then we check if the SR contains a point3d, line, or bbox ### 
-        checkIfSRContainsBbox = self.checkIfSRContainsGeometry(sr, geometry_type='bbox')
+        checkIfSRContainsBbox = self.checkIfSRContainsGeometry(sr, geometry_type='bbox2D')
         checkIfSRContains3DPoint = self.checkIfSRContainsGeometry(sr, geometry_type='point3D')
-        checkIfSRContainsPolyline = self.checkIfSRContainsGeometry(sr, geometry_type='polyline')
+        checkIfSRContainsPolyline = self.checkIfSRContainsGeometry(sr, geometry_type='polyline2D')
 
         ### checkIfSRContains3DPoint ###
         # We only check for FrameOfReferenceUID for 3Dpoint
@@ -442,8 +448,9 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     """
 
     # If SR contains a bounding box 
-    if (geometry_type == "bbox"):
-      for group in sr.content.get_planar_roi_measurement_groups():
+    if (geometry_type == "bbox2D"):
+      # for group in sr.content.get_planar_roi_measurement_groups():
+      for group in sr.content.get_planar_roi_measurement_groups(reference_type=codes.DCM.ImageRegion, graphic_type=hd.sr.GraphicTypeValues.POLYLINE):
         for eval in group.get_qualitative_evaluations(
               name=self.getSRCode("Geometric purpose of region"),
         ):
@@ -452,7 +459,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       return False
 
     # If SR contains a POLYLINE
-    elif (geometry_type == "polyline"):
+    elif (geometry_type == "polyline2D"):
       groups = sr.content.get_planar_roi_measurement_groups(
         reference_type=self.getSRCode("Image Region"),
         graphic_type=hd.sr.GraphicTypeValues.POLYLINE, 
@@ -531,12 +538,12 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     col.SetName("FindingSite")
     col = tableNode.AddColumn()
     col.SetName("Bounding box points")
-    col = tableNode.AddColumn()
-    col.SetName("width")
-    col = tableNode.AddColumn()
-    col.SetName("height")
-    col = tableNode.AddColumn()
-    col.SetName("center_RAS")
+    # col = tableNode.AddColumn()
+    # col.SetName("width")
+    # col = tableNode.AddColumn()
+    # col.SetName("height")
+    # col = tableNode.AddColumn()
+    # col.SetName("center_RAS")
 
     # Order by IPP2 
     poly_infos = sorted(poly_infos, key=lambda x: x['center_z'])
@@ -561,10 +568,10 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       tableNode.SetCellText(rowIndex, 2, finding_site[2])
       # add bbox points 
       tableNode.SetCellText(rowIndex, 3, polyline_str) 
-      # add width, height and center in RAS 
-      tableNode.SetCellText(rowIndex, 4, str(width))
-      tableNode.SetCellText(rowIndex, 5, str(height))
-      tableNode.SetCellText(rowIndex, 6, f"({', '.join(center)})")
+      # # add width, height and center in RAS 
+      # tableNode.SetCellText(rowIndex, 4, str(width))
+      # tableNode.SetCellText(rowIndex, 5, str(height))
+      # tableNode.SetCellText(rowIndex, 6, f"({', '.join(center)})")
 
 
     return tableNode 
@@ -714,10 +721,14 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       max_y = np.max([bbox[0,1], bbox[1,1], bbox[2,1], bbox[3,1]]) # using roi.GraphicData: max_y = np.max([bbox[1], bbox[3], bbox[5], bbox[7]])
       width = max_x - min_x 
       height = max_y - min_y 
+      # in pixel coordinates 
       center_x = min_x + width/2
       center_y = min_y + height/2 
-      center_z = self.getIPPFromSOP(referenced_sop_instance_uid, 
-                                    referenced_series_instance_uid)[2] 
+      # get ipp 
+      ipp = self.getIPPFromSOP(referenced_sop_instance_uid, 
+                                       referenced_series_instance_uid)
+      # in mm 
+      center_z = ipp[2] 
       
       # append to poly_infos
       poly_infos.append({
@@ -729,8 +740,11 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
                          "polyline": bbox, # using roi.GraphicData: [[bbox[0],bbox[1]], [bbox[2],bbox[3]], [bbox[4],bbox[5]], [bbox[6],bbox[7]]], 
                          "width": width, 
                          "height": height,
-                         "center_x": -center_x, # for display in Slicer, negate this. 
-                         "center_y": -center_y,  # for display in Slicer, negate this. 
+                         # "center_x": -center_x, # for display in Slicer, negate this. 
+                         # "center_y": -center_y,  # for display in Slicer, negate this. 
+                         # "center_z": center_z
+                         "center_x": center_x,
+                         "center_y": center_y, 
                          "center_z": center_z
                         })
 
@@ -860,11 +874,12 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       num_points = np.int32(len(polyline))
       point_line = [] 
       for n in range(0,num_points): 
-        pointx = polyline[n,0]
-        pointy = polyline[n,1]
+        pointx = polyline[n,0] # pixel coord space
+        pointy = polyline[n,1] # pixel coord space
         pointz = self.getIPPFromSOP(referenced_sop_instance_uid,
-                                    referenced_series_instance_uid)[2] 
-        point_line.append([-pointx, -pointy, pointz]) # negate for display in Slicer 
+                                    referenced_series_instance_uid)[2] # mm space 
+        # point_line.append([-pointx, -pointy, pointz]) # negate for display in Slicer 
+        point_line.append([pointx, pointy, pointz])
       # append to poly_infos
       line_infos.append({
                         "TrackingIdentifier": tracking_identifier, 
@@ -963,24 +978,49 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # Order by IPP2 
     poly_infos = sorted(poly_infos, key=lambda x: x['center_z'])
 
+    # We need the pixel spacing, in order to convert the coordinates from pixel space to mm space
+    referenced_series_instance_uid = sr.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
+    db = slicer.dicomDatabase
+    fileList = db.filesForSeries(referenced_series_instance_uid)
+    pixel_spacing = db.fileValue(fileList[0], self.getDICOMTagValue("PixelSpacing"))
+    pixel_spacing_x = np.float32(pixel_spacing.split("\\")[0])
+    pixel_spacing_y = np.float32(pixel_spacing.split("\\")[1])
+    num_rows = np.float32(db.fileValue(fileList[0], self.getDICOMTagValue("Rows")))
+    num_columns = np.float32(db.fileValue(fileList[0], self.getDICOMTagValue("Columns")))
+
     for i,p in enumerate(poly_infos):
       # get values 
       polyline = p['polyline']
       tracking_identifier = p['TrackingIdentifier']
-      width = p['width']
-      height = p['height']
-      center_x = p['center_x'] # already negated 
-      center_y = p['center_y'] # already negated 
-      center_z = p['center_z']
-      center_ras = np.asarray([center_x, center_y, center_z])
+      width = p['width'] # in pixel coord
+      height = p['height'] # in pixel coord
+      # center_x = p['center_x'] # already negated 
+      # center_y = p['center_y'] # already negated 
+      # center_z = p['center_z']
+      # center_ras = np.asarray([center_x, center_y, center_z])
+      center_x = p['center_x'] # in pixel coord
+      center_y = p['center_y'] # in pixel coord
+      center_z = p['center_z'] # in mm 
+      # convert pixel coordinates to mm 
+      referenced_sop_instance_uid = p['SOPInstanceUID']
+      ipp = self.getIPPFromSOP(referenced_sop_instance_uid, 
+                               referenced_series_instance_uid)
+      ipp_0 = ipp[0] 
+      ipp_1 = ipp[1] 
+      center_x_mm = -((center_x * pixel_spacing_x) + ipp_0)
+      center_y_mm = -((center_y * pixel_spacing_y) + ipp_1)
+      center_ras = np.asarray([center_x_mm, center_y_mm, center_z])
+      width_mm = width * pixel_spacing_x
+      height_mm = height * pixel_spacing_y
       bbox_name = tracking_identifier # for now 
       # create roi 
-      bboxNode = self.create_2d_roi(loadable, center_ras, width, height, slice_normal=(0, 0, 1), thickness=0.01, bbox_name=bbox_name) 
+      bboxNode = self.create_2d_roi(loadable, center_ras, width_mm, height_mm, slice_normal=(0, 0, 1), thickness=0.01, bbox_name=bbox_name) 
       markupItemID = shNode.GetItemByDataNode(bboxNode)
       # Set the parent to the folder
       shNode.SetItemParent(markupItemID, bboxFolderID)
       if (i==0):
-        slicer.modules.markups.logic().JumpSlicesToLocation(center_x, center_y, center_z, True)
+        # slicer.modules.markups.logic().JumpSlicesToLocation(center_x, center_y, center_z, True)
+        slicer.modules.markups.logic().JumpSlicesToLocation(center_x_mm, center_y_mm, center_z, True)
 
     return 
   
@@ -1067,6 +1107,17 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     # Now create the folder and set the name 
     linesFolderID = shNode.CreateFolderItem(studyNode, str(SeriesNumber) + ': ' + SeriesDescription)
 
+    # Get the referenced series instance uid 
+    # Needed for later getting the IPP 
+    referenced_series_instance_uid = sr.CurrentRequestedProcedureEvidenceSequence[0].ReferencedSeriesSequence[0].SeriesInstanceUID
+    db = slicer.dicomDatabase
+    fileList = db.filesForSeries(referenced_series_instance_uid)
+    pixel_spacing = db.fileValue(fileList[0], self.getDICOMTagValue("PixelSpacing"))
+    pixel_spacing_x = np.float32(pixel_spacing.split("\\")[0])
+    pixel_spacing_y = np.float32(pixel_spacing.split("\\")[1])
+    # num_rows = np.float32(db.fileValue(fileList[0], self.getDICOMTagValue("Rows")))
+    # num_columns = np.float32(db.fileValue(fileList[0], self.getDICOMTagValue("Columns")))
+
     # Create all the line nodes 
     for i,p in enumerate(line_infos):
       line_text = p['TrackingIdentifier']
@@ -1079,13 +1130,23 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       num_points = len(polyline)
       # add each as a control point 
       for n in range(0,num_points): 
-        point_x = polyline[n][0] # already negated 
-        point_y = polyline[n][1] # already negated 
+        # point_x = polyline[n][0] # already negated 
+        # point_y = polyline[n][1] # already negated 
+        point_x = polyline[n][0] # pixel coord space 
+        point_y = polyline[n][1] # pixel coord space
+        # convert pixel coordinates to mm 
+        referenced_sop_instance_uid = p['SOPInstanceUID']
+        ipp = self.getIPPFromSOP(referenced_sop_instance_uid, 
+                                 referenced_series_instance_uid)
+        ipp_0 = ipp[0] 
+        ipp_1 = ipp[1] 
+        point_x_mm = -((point_x * pixel_spacing_x) + ipp_0)
+        point_y_mm = -((point_y * pixel_spacing_y) + ipp_1)
         point_z = polyline[n][2]
-        lineNode.AddControlPoint(point_x, point_y, point_z)
+        lineNode.AddControlPoint(point_x_mm, point_y_mm, point_z)
         # jump to the first line 
         if (i==0 and n==0):
-          slicer.modules.markups.logic().JumpSlicesToLocation(point_x, point_y, point_z, True)
+          slicer.modules.markups.logic().JumpSlicesToLocation(point_x_mm, point_y_mm, point_z, True)
       # do not display the length measurement 
       lineNode.GetMeasurement('length').SetEnabled(False)
       # change size of glyph 
@@ -1207,15 +1268,15 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       else: 
 
         # check if contains a point, bbox, polyline 
-        checkIfSRContainsBbox = self.checkIfSRContainsGeometry(sr, geometry_type='bbox')
+        checkIfSRContainsBbox = self.checkIfSRContainsGeometry(sr, geometry_type='bbox2D')
         checkIfSRContains3DPoint = self.checkIfSRContainsGeometry(sr, geometry_type='point3D')
-        checkIfSRContainsPolyline = self.checkIfSRContainsGeometry(sr, geometry_type='polyline')
+        checkIfSRContainsPolyline = self.checkIfSRContainsGeometry(sr, geometry_type='polyline2D')
 
         tables = [] 
 
         # if bbox 
         if (checkIfSRContainsBbox): 
-          print('SR contains bounding box')
+          print('SR contains 2D bounding box')
           bboxInfo, bboxTableNode = self.extractBboxMetadataToVtkTableNode(sr)
           self.showTable(bboxTableNode)
           self.addSeriesInSubjectHierarchy(loadable, bboxTableNode)
@@ -1233,7 +1294,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
         # if polyline but not bbox 
         if (checkIfSRContainsPolyline==1 and checkIfSRContainsBbox==0):
-            print('SR contains a polyline, and not a bbox')
+            print('SR contains a 2D polyline, but not a bbox')
             lineInfo, lineTableNode = self.extractLineMetadataToVtkTableNode(sr)
             self.showTable(lineTableNode)
             self.addSeriesInSubjectHierarchy(loadable, lineTableNode)
