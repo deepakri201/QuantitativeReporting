@@ -57,7 +57,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     loadables = []
 
     for cFile in files:
-      dataset = pydicom.dcmread(cFile) # dataset = pydicom.read_file(cFile)
+      dataset = pydicom.dcmread(cFile)
 
       uid = self.getDICOMValue(dataset, "SOPInstanceUID")
       if uid == "":
@@ -378,7 +378,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
   def getDateTime(self, uid):
     filename = slicer.dicomDatabase.fileForInstance(uid)
-    dataset = pydicom.dcmread(filename) # dataset = pydicom.read_file(filename)
+    dataset = pydicom.dcmread(filename)
     if hasattr(dataset, 'SeriesDate') and hasattr(dataset, "SeriesTime"):
       date = dataset.SeriesDate
       time = dataset.SeriesTime
@@ -1282,7 +1282,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       rwvmPlugin = slicer.modules.dicomPlugins["DICOMRWVMPlugin"]()
       rwvmFile = rwvmFiles[0]
       logging.debug("Reading RWVM from " + rwvmFile)
-      rwvmDataset = pydicom.dcmread(rwvmFile) # rwvmDataset = pydicom.read_file(rwvmFile)
+      rwvmDataset = pydicom.dcmread(rwvmFile)
       if hasattr(rwvmDataset, "ReferencedSeriesSequence"):
         if hasattr(rwvmDataset.ReferencedSeriesSequence[0], "SeriesInstanceUID"):
           if rwvmDataset.ReferencedSeriesSequence[0].SeriesInstanceUID == segLoadable.referencedSeriesUID:
@@ -1390,7 +1390,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     """
 
     srFilePath = slicer.dicomDatabase.fileForInstance(srUID)
-    sr = pydicom.dcmread(srFilePath) # sr = pydicom.read_file(srFilePath)
+    sr = pydicom.dcmread(srFilePath)
 
     if not self.isConcept(sr, "imagingMeasurementReport"):
       return sr
@@ -1446,7 +1446,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       if not referenceFilePath:
         raise Exception(f"Referenced image is not found in the database (referencedSOPInstanceUID={measurement['referencedSOPInstanceUID']}). Polyline point positions cannot be determined in 3D.")
 
-      reference = pydicom.dcmread(referenceFilePath) # reference = pydicom.read_file(referenceFilePath)
+      reference = pydicom.dcmread(referenceFilePath)
       origin = numpy.array(reference.ImagePositionPatient)
       alongColumnVector = numpy.array(reference.ImageOrientationPatient[:3])
       alongRowVector = numpy.array(reference.ImageOrientationPatient[3:])
@@ -1469,7 +1469,7 @@ class DICOMLongitudinalTID1500PluginClass(DICOMTID1500PluginClass):
     loadables = []
 
     for cFile in files:
-      dataset = pydicom.dcmread(cFile) # dataset = pydicom.read_file(cFile)
+      dataset = pydicom.dcmread(cFile)
 
       uid = self.getDICOMValue(dataset, "SOPInstanceUID")
       if uid == "":
@@ -1509,7 +1509,7 @@ class DICOMLongitudinalTID1500PluginClass(DICOMTID1500PluginClass):
       foundSRs = []
       for s in series:
         srFile = self.fileForSeries(s)
-        tempDCM = pydicom.read_file(srFile)
+        tempDCM = pydicom.dcmread(srFile)
         if self.isDICOMTID1500(tempDCM):
           foundSRs.append(srFile)
           otherSRDatasets.append(tempDCM)
