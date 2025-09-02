@@ -919,6 +919,7 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
 
     # Get the subject hierarchy
     shNode = slicer.modules.subjecthierarchy.logic().GetSubjectHierarchyNode()
+    # print('shNode: ' + str(shNode))
 
     # We use the SeriesNumber and the SeriesDescription of the SR to name the folder 
     SeriesNumber = sr.SeriesNumber
@@ -945,6 +946,33 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
     num_rows = np.float32(db.fileValue(fileList[0], self.getDICOMTagValue("Rows")))
     num_columns = np.float32(db.fileValue(fileList[0], self.getDICOMTagValue("Columns")))
 
+    # Get the volume nodes 
+    volumeNodes = slicer.util.getNodesByClass('vtkMRMLScalarVolumeNode')
+    SOPInstanceUIDs = [] 
+    # For each volume node, get the SOPInstanceUIDs if it's the correct series 
+    for volumeNode in volumeNodes: 
+      volumeItemId = shNode.GetItemByDataNode(volumeNode)
+      SeriesInstanceUID = shNode.GetItemUID(volumeItemId, "DICOM")
+      if (SeriesInstanceUID == referenced_series_instance_uid):
+        SOPInstanceUIDs = volumeNode.GetAttribute("DICOM.instanceUIDs").split()
+      # print("SOPInstanceUIDs from volumeNode: " + str(SOPInstanceUIDs))
+
+    # If a sequence node
+    sequenceNodes = slicer.util.getNodesByClass("vtkMRMLSequenceNode")
+    for sequenceNode in sequenceNodes: 
+      browserNode = slicer.modules.sequences.logic().GetFirstBrowserNodeForSequenceNode(sequenceNode)
+      # Get the current selected index 
+      selected_item_number = browserNode.selected_item_number
+      # Get the corresponding volume node 
+      volumeNode = sequenceNode.GetNthDataNode(selected_item_number) 
+      volumeItemId = shNode.GetItemByDataNode(volumeNode)
+      SeriesInstanceUID = shNode.GetItemUID(volumeItemId, "DICOM")
+      if (SeriesInstanceUID == referenced_series_instance_uid):
+        SOPInstanceUIDs = volumeNode.GetAttribute("DICOM.instanceUIDs").split()
+    # print("SOPInstanceUIDs from sequenceNode: " + str(SOPInstanceUIDs))
+
+
+
     for i,p in enumerate(poly_infos):
       # get values 
       polyline = p['polyline']
@@ -968,6 +996,11 @@ class DICOMTID1500PluginClass(DICOMPluginBase, ModuleLogicMixin):
       bbox_name = tracking_identifier # for now 
       # create roi 
       bboxNode = self.create_2d_roi(loadable, center_ras, width_mm, height_mm, slice_normal=(0, 0, 1), thickness=0.01, bbox_name=bbox_name) 
+      # set visibility 
+      if referenced_sop_instance_uid in SOPInstanceUIDs: 
+        bboxNode.GetDisplayNode().SetVisibility(True)
+      else:
+        bboxNode.GetDisplayNode().SetVisibility(False)
       markupItemID = shNode.GetItemByDataNode(bboxNode)
       # Set the parent to the folder
       shNode.SetItemParent(markupItemID, bboxFolderID)
